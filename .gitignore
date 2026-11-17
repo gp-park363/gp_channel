@@ -12,6 +12,12 @@ wheels/
 # Local settings
 .env
 
+# crt
+caddy-root.crt
+
+# docs
+docs/
+
 # Tool caches
 .pytest_cache/
 .ruff_cache/
