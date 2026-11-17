@@ -16,7 +16,8 @@
 | 순서 | 명령 | 하는 일 | 매뉴얼 |
 |---|---|---|---|
 | 0 | `git commit` | 보낼 코드를 커밋한다. 커밋되지 않은 변경이 있으면 스크립트가 멈춘다 | 3장 |
-| 1 | `deploy/nas.sh key` | 이 PC의 SSH 키를 NAS에 등록한다(NAS 비밀번호 한 번 입력) | 2.1 |
+| 1 | QTS에서 공유 폴더 `barochannel` 만들기 | 코드·`.env`·백업을 둘 폴더. 스크립트는 만들지 않는다 | 2.5 |
+| 1-1 | `deploy/nas.sh key` | (선택) 이 PC의 SSH 키를 NAS에 등록한다. QTS 홈 폴더 서비스가 켜져 있어야 한다 | 2.1 |
 | 2 | `deploy/nas.sh check` | docker·compose 버전(2.24 이상), bash, 8000 포트, 메모리를 점검한다 | 1장 |
 | 3 | `deploy/nas.sh push` | 커밋된 코드(HEAD)를 NAS 설치 폴더로 보낸다 | 3장 |
 | 4 | `deploy/nas.sh env` | 관리자 이메일·비밀번호·회사명을 묻고 NAS에 `.env`를 만든다. SECRET_KEY와 DB·MinIO 비밀번호는 임의 값으로 넣고, 1차 설정(`COMPOSE_FILE`, 포트 8000)을 켠다. 이미 있으면 덮어쓰지 않는다 | 4장 |
@@ -35,7 +36,7 @@ deploy/nas.sh logs app 200    # 앱 로그 200줄 (서비스: app, postgres, min
 deploy/nas.sh backup          # 지금 백업
 ```
 
-- 대상은 환경 변수로 바꾼다: `NAS_HOST`(기본 `gp@192.168.0.114`), `NAS_DIR`(기본 `/share/Container/barochannel`), `NAS_URL`(기본 `http://192.168.0.114:8000`). 2차로 넘어간 뒤에는 `NAS_URL=https://<도메인>:<포트>`로 실행한다.
+- 대상은 환경 변수로 바꾼다: `NAS_HOST`(기본 `gp@192.168.0.114`), `NAS_DIR`(기본 `/share/barochannel`), `NAS_URL`(기본 `http://192.168.0.114:8000`). 2차로 넘어간 뒤에는 `NAS_URL=https://<도메인>:<포트>`로 실행한다.
 - SSH 키를 등록하지 않아도 쓸 수 있다. 연결을 2분 동안 재사용하므로 비밀번호를 명령마다 한 번쯤만 묻는다.
 - 스크립트는 SSH가 되지 않는 환경에서 흉내 내어 시험했다. 실제 NAS에서 처음 돌릴 때는 `check`부터 한 단계씩 결과를 보며 진행한다.
 
@@ -58,7 +59,7 @@ deploy/nas.sh backup          # 지금 백업
 |---|---|
 | NAS | TS-453D, Celeron J4125(x86_64), 메모리 4GB, QTS 5.2.9 |
 | Docker / Compose | 27.1.2 / v2.29.1 (Container Station) |
-| 설치 폴더 | `/share/Container/barochannel` |
+| 설치 폴더 | `/share/barochannel` |
 | 데이터 | Docker 볼륨 `barochannel_postgres-data`, `barochannel_minio-data` |
 
 1차 설정은 [deploy/compose.lan.yml](deploy/compose.lan.yml)에 있다. `.env`의 `COMPOSE_FILE` 한 줄로 켠다.
@@ -75,6 +76,7 @@ deploy/nas.sh backup          # 지금 백업
 ### 2.1 SSH
 - QTS **제어판 → 네트워크 및 파일 서비스 → Telnet/SSH** → "SSH 연결 허용"(포트 22).
 - SSH는 관리자 그룹 계정만 들어갈 수 있다. `gp` 계정으로 `docker`가 되는 것을 확인했다.
+- SSH 키를 쓰려면 홈 폴더가 있어야 한다. **제어판 → 권한 → 사용자 → 홈 폴더 → "모든 사용자에 대해 홈 폴더 서비스 활성화"**. 켜지 않으면 키 등록이 `Could not chdir to home directory`로 실패한다. 키 없이 비밀번호로 해도 된다.
 - PC에서 비밀번호 없이 들어가려면 SSH 키를 등록한다.
 
   ```bash
@@ -91,6 +93,18 @@ QuFirewall을 쓰면 사내 대역 `192.168.0.0/24`에 TCP 8000을 허용한다.
 ### 2.4 인터넷
 처음 빌드할 때 Docker 이미지와 파이썬 패키지를 받으므로 NAS가 인터넷에 나갈 수 있어야 한다.
 
+### 2.5 설치용 공유 폴더
+코드, `.env`, 백업을 둘 공유 폴더를 만든다. 다른 서비스(Public, Web …)처럼 데이터 볼륨(`CACHEDEV1_DATA`)에 생기고, File Station과 HBS 3 백업에서도 보인다.
+
+1. QTS **제어판 → 권한 → 공유 폴더 → 생성 → 공유 폴더**
+2. 폴더 이름 `barochannel`, 디스크 볼륨은 데이터 볼륨(DataVol1)
+3. 사용자 권한: `gp`에 **읽기/쓰기**. 다른 사용자는 **접근 거부**(`.env`에 비밀번호가 있다)
+4. 만든 뒤 SSH에서 `ls -ld /share/barochannel`로 `/share/barochannel -> CACHEDEV1_DATA/barochannel`처럼 보이면 된다
+
+`/share` 바로 아래에 `mkdir`로 폴더를 만들지 않는다. 데이터 디스크가 아니라 시스템 영역에 생겨 재부팅 때 사라질 수 있다. 스크립트도 이 폴더를 만들지 않고, 없으면 멈춘다.
+
+Docker 볼륨(DB·첨부파일 데이터)은 이 폴더가 아니라 Container Station의 저장 위치에 생긴다. 백업 파일(`backups/`)만 이 폴더에 쌓인다.
+
 ## 3. 코드 보내기
 
 NAS에는 git이나 GitHub 인증을 두지 않는다. PC에서 커밋된 코드를 묶어 보낸다. 커밋되지 않은 변경은 가지 않는다.
@@ -100,18 +114,18 @@ PC(프로젝트 폴더)에서:
 ```bash
 git status                       # 보낼 변경이 모두 커밋됐는지 확인
 git archive HEAD | ssh gp@192.168.0.114 \
-  'mkdir -p /share/Container/barochannel && tar x -C /share/Container/barochannel'
+  'tar x -C /share/barochannel'
 ```
 
 - `.env`, `backups/`처럼 git에 없는 파일은 가지 않는다. NAS의 `.env`도 덮어쓰지 않는다.
-- `/share/Container`는 Container Station이 만드는 공유 폴더다. 없으면 다른 공유 폴더를 쓰고, 이 문서의 경로만 바꿔 읽는다.
+- `/share/barochannel`은 2.5에서 만든 공유 폴더다. 다른 이름으로 만들었다면 이 문서의 경로를 바꿔 읽고, 스크립트는 `NAS_DIR=/share/<이름>`으로 실행한다.
 
 ## 4. `.env` 만들기
 
 NAS에서:
 
 ```bash
-cd /share/Container/barochannel
+cd /share/barochannel
 cp .env.example .env
 chmod 600 .env
 vi .env
@@ -146,7 +160,7 @@ python -c "import secrets;print(secrets.token_hex(24))"       # BARO_DB_PASSWORD
 NAS에서:
 
 ```bash
-cd /share/Container/barochannel
+cd /share/barochannel
 docker compose --profile app up -d --build
 docker compose --profile app ps
 ```
@@ -171,13 +185,13 @@ PC(프로젝트 폴더)에서:
 
 ```bash
 deploy/backup.sh                                     # backups/<시각>/ 생성
-scp -r backups/<시각> gp@192.168.0.114:/share/Container/barochannel/backups/
+scp -r backups/<시각> gp@192.168.0.114:/share/barochannel/backups/
 ```
 
 NAS에서:
 
 ```bash
-cd /share/Container/barochannel
+cd /share/barochannel
 docker compose up -d postgres minio                  # 저장소만 띄운다
 deploy/restore.sh backups/<시각>                     # 확인 질문에 y
 docker compose --profile app up -d --build
@@ -193,13 +207,13 @@ PC에서:
 
 ```bash
 git status                                           # 커밋 확인
-git archive HEAD | ssh gp@192.168.0.114 'tar x -C /share/Container/barochannel'
+git archive HEAD | ssh gp@192.168.0.114 'tar x -C /share/barochannel'
 ```
 
 NAS에서:
 
 ```bash
-cd /share/Container/barochannel
+cd /share/barochannel
 deploy/backup.sh                                     # 업데이트 전 백업
 docker compose --profile app up -d --build
 docker compose --profile app ps
@@ -212,14 +226,14 @@ docker compose --profile app ps
 ## 8. 백업
 
 ```bash
-cd /share/Container/barochannel
+cd /share/barochannel
 deploy/backup.sh                     # backups/<시각>/barochannel.dump, minio-data.tgz
 ```
 
 백업하는 몇 초 동안 앱이 멈춘다. 정기 백업은 QTS cron에 등록한다(매일 새벽 3시 예시).
 
 ```bash
-echo '0 3 * * * cd /share/Container/barochannel && deploy/backup.sh >> backups/backup.log 2>&1' >> /etc/config/crontab
+echo '0 3 * * * cd /share/barochannel && deploy/backup.sh >> backups/backup.log 2>&1' >> /etc/config/crontab
 crontab /etc/config/crontab && /etc/init.d/crond.sh restart
 ```
 
@@ -332,7 +346,7 @@ Let's Encrypt는 같은 도메인 인증서를 일주일에 5번까지만 새로
 NAS에서:
 
 ```bash
-cd /share/Container/barochannel
+cd /share/barochannel
 deploy/backup.sh                                     # 전환 전 백업
 vi .env
 ```
@@ -395,7 +409,7 @@ PC에서 확인:
 자주 쓰는 명령:
 
 ```bash
-cd /share/Container/barochannel
+cd /share/barochannel
 docker compose --profile app ps                      # 상태
 docker compose --profile app logs -f app             # 앱 로그
 docker compose --profile app restart app             # 앱만 다시 시작

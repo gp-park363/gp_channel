@@ -4,14 +4,14 @@
 #
 # 바꿀 수 있는 값(환경 변수):
 #   NAS_HOST  SSH 접속 대상      (기본 gp@192.168.0.114)
-#   NAS_DIR   NAS의 설치 폴더    (기본 /share/Container/barochannel)
+#   NAS_DIR   NAS의 설치 폴더    (기본 /share/barochannel)
 #   NAS_URL   확인용 접속 주소   (기본 http://<NAS IP>:8000)
 #   NAS_SSH   ssh 명령           (기본 ssh)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 NAS_HOST="${NAS_HOST:-gp@192.168.0.114}"
-NAS_DIR="${NAS_DIR:-/share/Container/barochannel}"
+NAS_DIR="${NAS_DIR:-/share/barochannel}"
 NAS_URL="${NAS_URL:-http://${NAS_HOST#*@}:8000}"
 NAS_SSH="${NAS_SSH:-ssh}"
 LAN_COMPOSE_FILE="docker-compose.yml:deploy/compose.lan.yml"
@@ -67,11 +67,29 @@ usage() {
 EOF
 }
 
+# 설치 폴더는 QTS 공유 폴더로 미리 만들어 둔다. /share 바로 아래에 mkdir로 만들면
+# 데이터 디스크가 아니라 시스템 영역에 생겨 재부팅 때 사라질 수 있어 스크립트가 만들지 않는다.
+require_dir() {
+  remote_cmd "test -d '$NAS_DIR' && test -w '$NAS_DIR'" ||
+    die "$NAS_DIR 이 없거나 쓸 수 없습니다. QTS에서 공유 폴더를 만들고 권한을 주세요(deploy_qnap.md 2.5)."
+}
+
 cmd_key() {
   say "SSH 키 등록 ($NAS_HOST)"
   [[ -f ~/.ssh/id_ed25519.pub || -f ~/.ssh/id_rsa.pub ]] || ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519
-  ssh-copy-id "$NAS_HOST"
+  if ! ssh-copy-id "$NAS_HOST"; then
+    # QTS는 홈 폴더 서비스가 꺼져 있으면 /share/homes/<사용자>가 없어 키를 둘 곳이 없다.
+    cat >&2 <<EOF
+
+키를 등록하지 못했습니다. "Could not chdir to home directory"가 보였다면 NAS에 홈 폴더가 없는 것입니다.
+  QTS 제어판 → 권한 → 사용자 → 홈 폴더 → "모든 사용자에 대해 홈 폴더 서비스 활성화" → 적용
+그 뒤 deploy/nas.sh key를 다시 실행합니다. 키 없이도 나머지 명령은 비밀번호로 쓸 수 있습니다.
+EOF
+    exit 1
+  fi
   echo "다음부터 비밀번호 없이 들어가는지 확인: ssh $NAS_HOST true"
+  echo "계속 비밀번호를 묻으면 NAS 홈 폴더 권한을 좁힌다:"
+  echo "  ssh $NAS_HOST 'chmod 755 ~ && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys'"
 }
 
 cmd_check() {
@@ -89,7 +107,7 @@ else
 fi
 echo "mem_avail_mb=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)"
 if netstat -tln 2>/dev/null | grep -q '[:.]8000 '; then echo "port8000=사용중"; else echo "port8000=비어있음"; fi
-if [ -d "$DIR" ]; then echo "dir=있음"; else echo "dir=없음(push 때 만든다)"; fi
+if [ ! -d "$DIR" ]; then echo "dir=없음"; elif [ -w "$DIR" ]; then echo "dir=있음"; else echo "dir=쓰기권한없음"; fi
 if [ -f "$DIR/.env" ]; then echo "env=있음"; else echo "env=없음"; fi
 if [ -f "$DIR/.deployed" ]; then echo "deployed=$(cat "$DIR/.deployed")"; fi
 EOF
@@ -98,6 +116,8 @@ EOF
   compose="$(sed -n 's/^compose=v\{0,1\}//p' <<<"$out" | sed 's/-.*//')"
   grep -q '^docker=없음' <<<"$out" && die "docker를 찾지 못했습니다. Container Station 설치와 SSH 계정 권한을 확인하세요."
   grep -q '^bash=없음' <<<"$out" && echo "주의: bash가 없어 deploy/backup.sh, restore.sh를 쓸 수 없습니다."
+  grep -q '^dir=없음' <<<"$out" && die "$NAS_DIR 이 없습니다. QTS에서 공유 폴더를 먼저 만드세요(deploy_qnap.md 2.5)."
+  grep -q '^dir=쓰기권한없음' <<<"$out" && die "$NAS_DIR 에 쓸 수 없습니다. 공유 폴더 권한에서 ${NAS_HOST%@*} 계정에 읽기/쓰기를 주세요."
   if [[ "$(printf '%s\n%s\n' "$MIN_COMPOSE" "$compose" | sort -V | head -1)" != "$MIN_COMPOSE" ]]; then
     die "Docker Compose $MIN_COMPOSE 이상이 필요합니다(현재 $compose). Container Station을 업데이트하세요."
   fi
@@ -109,6 +129,7 @@ EOF
 
 cmd_env() {
   say "NAS .env 만들기 ($NAS_HOST:$NAS_DIR/.env)"
+  require_dir
   if remote_cmd "test -e '$NAS_DIR/.env'"; then
     die "NAS에 .env가 이미 있습니다. 덮어쓰지 않습니다. 고치려면 NAS에서 직접 편집하세요."
   fi
@@ -161,7 +182,7 @@ if missing:
 open(path, "w", encoding="utf-8").write("\n".join(lines) + "\n")
 PY
   # 덮어쓰지 않도록 NAS에서 한 번 더 확인하고, 다른 사람이 못 읽게 600으로 만든다.
-  remote_cmd "mkdir -p '$NAS_DIR' && cd '$NAS_DIR' && umask 077 && [ ! -e .env ] && cat > .env" <"$tmp"
+  remote_cmd "cd '$NAS_DIR' && umask 077 && [ ! -e .env ] && cat > .env" <"$tmp"
   echo "만들었습니다. DB·MinIO 비밀번호와 SECRET_KEY는 임의 값으로 들어갔습니다(NAS의 .env에만 있음)."
   echo "1차 설정: $LAN_COMPOSE_FILE, 포트 8000"
 }
@@ -179,7 +200,8 @@ cmd_push() {
     sed 's/^/  /' <<<"$untracked" | head -10
   fi
   rev="$(git log -1 --format='%h %ad %s' --date=format:'%Y-%m-%d %H:%M')"
-  git archive HEAD | remote_cmd "mkdir -p '$NAS_DIR' && tar xf - -C '$NAS_DIR'"
+  require_dir
+  git archive HEAD | remote_cmd "tar xf - -C '$NAS_DIR'"
   printf '%s\n' "$rev" | remote_cmd "cat > '$NAS_DIR/.deployed'"
   echo "보냄: $rev"
 }
