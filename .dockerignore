@@ -1,0 +1,12 @@
+.env
+.git
+.venv
+.vscode
+.pytest_cache
+.ruff_cache
+**/__pycache__
+*.db
+docs
+tests
+samples
+backups

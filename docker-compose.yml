@@ -1,0 +1,103 @@
+# PostgreSQL과 S3 호환 스토리지. 계정은 .env의 BARO_DB_*, BARO_S3_* 값을 쓴다.
+# 기본값(barochannel)은 로컬 개발용이고, 운영 서버에서는 반드시 .env에 바꿔 둔다.
+# PostgreSQL 비밀번호는 볼륨을 처음 만들 때만 적용된다. 이미 만든 DB의 비밀번호를 바꾸려면 README를 본다.
+# `docker compose up -d`는 저장소만 띄운다(앱은 uv run으로 직접 실행).
+# `docker compose --profile app up -d --build`는 앱과 HTTPS 프록시(Caddy)까지 띄운다.
+# 사내망에서 IP·HTTP로만 쓸 때(Caddy 없이)는 deploy/compose.lan.yml을 함께 쓴다.
+# PostgreSQL 호스트 포트는 5432다(127.0.0.1에만 연다).
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: ${BARO_DB_USER:-barochannel}
+      POSTGRES_PASSWORD: ${BARO_DB_PASSWORD:-barochannel}
+      POSTGRES_DB: ${BARO_DB_NAME:-barochannel}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    # 공식 minio/minio 이미지는 배포가 중단되어 Chainguard 빌드를 디지스트로 고정한다.
+    image: cgr.dev/chainguard/minio@sha256:cee9a8e35885e93f14b3cb32960e5017aff74e2adfb52ba87c65003b0163886b
+    command: server /data --console-address ":9001"
+    environment:
+      # 앱이 쓰는 S3 키가 곧 MinIO 루트 계정이다. MinIO는 비밀번호가 8자 이상이어야 한다.
+      MINIO_ROOT_USER: ${BARO_S3_ACCESS_KEY:-barochannel}
+      MINIO_ROOT_PASSWORD: ${BARO_S3_SECRET_KEY:-barochannel}
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - minio-data:/data
+
+  app:
+    profiles: [app]
+    build: .
+    environment:
+      # 컨테이너 안에서는 서비스 이름으로 붙는다. 운영 모드라 세션 쿠키는 HTTPS 전용이다.
+      BARO_DB_HOST: postgres
+      BARO_DB_PORT: "5432"
+      BARO_DB_USER: ${BARO_DB_USER:-barochannel}
+      BARO_DB_PASSWORD: ${BARO_DB_PASSWORD:-barochannel}
+      BARO_DB_NAME: ${BARO_DB_NAME:-barochannel}
+      BARO_S3_ENDPOINT_URL: http://minio:9000
+      BARO_S3_ACCESS_KEY: ${BARO_S3_ACCESS_KEY:-barochannel}
+      BARO_S3_SECRET_KEY: ${BARO_S3_SECRET_KEY:-barochannel}
+      BARO_S3_BUCKET: ${BARO_S3_BUCKET:-barochannel}
+      BARO_SECRET_KEY: ${BARO_SECRET_KEY:?BARO_SECRET_KEY를 긴 임의 값으로 설정하세요}
+      BARO_ADMIN_EMAIL: ${BARO_ADMIN_EMAIL:-}
+      BARO_ADMIN_PASSWORD: ${BARO_ADMIN_PASSWORD:-}
+      BARO_COMPANY_NAME: ${BARO_COMPANY_NAME:-바로채널}
+      BARO_INTEGRATION_ALLOWED_HOSTS: ${BARO_INTEGRATION_ALLOWED_HOSTS:-}
+      # 앱 포트는 외부에 열지 않고 Caddy만 붙으므로, 내부망에서 온 X-Forwarded-* 헤더를 믿는다.
+      FORWARDED_ALLOW_IPS: "*"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    restart: unless-stopped
+
+  caddy:
+    profiles: [app]
+    build:
+      context: deploy
+      dockerfile: caddy.Dockerfile
+    environment:
+      # 접속 주소. DNS가 이 서버를 가리켜야 한다(Cloudflare에 A 레코드 또는 PC의 hosts 파일).
+      BARO_DOMAIN: ${BARO_DOMAIN:-gw.goodpackage.co.kr}
+      # Cloudflare API 토큰. 권한: Zone → DNS → Edit, 대상: 해당 도메인 영역.
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+      # NAS처럼 80·443을 이미 쓰는 서버에서는 다른 포트를 정한다. 컨테이너 안에서도 같은 포트로
+      # 받아야 Caddy가 HTTP→HTTPS 리다이렉트와 주소를 올바른 포트로 만든다.
+      BARO_HTTP_PORT: ${BARO_HTTP_PORT:-80}
+      BARO_HTTPS_PORT: ${BARO_HTTPS_PORT:-443}
+      # VPN(Tailscale) IP로 접속할 때 그 IP용 인증서를 자체 CA로 발급한다. 없으면 쓰지 않는다.
+      BARO_VPN_IP: ${BARO_VPN_IP:-}
+      # SNI 없이(IP로) 들어올 때 내줄 인증서. VPN IP가 있으면 그것, 없으면 도메인.
+      BARO_DEFAULT_SNI: ${BARO_VPN_IP:-${BARO_DOMAIN:-gw.goodpackage.co.kr}}
+    ports:
+      - "${BARO_HTTP_PORT:-80}:${BARO_HTTP_PORT:-80}"
+      - "${BARO_HTTPS_PORT:-443}:${BARO_HTTPS_PORT:-443}"
+      - "${BARO_HTTPS_PORT:-443}:${BARO_HTTPS_PORT:-443}/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # 발급받은 인증서와 자체 CA 키. 지우면 다시 발급한다.
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  minio-data:
+  caddy-data:
+  caddy-config:

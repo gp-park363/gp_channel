@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="frame">
+  {% if user is defined and user %}
+  <header class="user-bar">
+    <a class="brand" href="/"><img src="{{ asset('brand/logo.svg') }}" alt="" width="26" height="26"><span class="brand-text"><span class="brand-name">{{ company_name }}</span>{% if company_name != "바로채널" %}<small class="brand-by">Powered by 바로Channel</small>{% endif %}</span></a>
+    <a class="user-chip" href="/more" aria-label="내 정보: {{ user.name }}, {{ user.department_name or ('시스템 관리자' if is_system_admin(user) else '소속 없음') }}">
+      <span class="avatar" aria-hidden="true">{{ user.name[:1] }}</span>
+      <span class="user-text">
+        <strong>{{ user.name }}</strong>
+        <small><span class="user-dept">{{ user.department_name or ("시스템 관리자" if is_system_admin(user) else "소속 없음") }}</span><span class="user-email">{{ user.email }}</span></small>
+      </span>
+    </a>
+  </header>
+  {% include "partials/admin_bar.html" %}
+  {% endif %}
+  <div class="app{% if root_tab %} has-tabbar{% endif %}"{% block app_attrs %}{% endblock %}>
+    <nav class="rail" aria-label="주 메뉴">
+      <div class="rail-groups">
+        {% if current_group is defined and current_group %}{% set rail_group_id = current_group.group.id %}{% elif channel is defined and channel %}{% set rail_group_id = channel.group_id %}{% else %}{% set rail_group_id = none %}{% endif %}
+        {% for item in navigation|default([]) %}
+        <a href="{{ item.href }}" title="{{ item.group.name }}" class="rail-item{% if item.group.id == rail_group_id %} active{% endif %}"{% if item.group.id == rail_group_id %} aria-current="true"{% endif %}>{{ item.group.name[:2] }}<i class="rail-dot" data-unread-group="{{ item.group.id }}"{% if not item.unread_total %} hidden{% endif %}><span class="sr-only">새 글 있음</span></i></a>
+        {% endfor %}
+      </div>
+      <div class="rail-tabs">{% include "partials/nav_tabs.html" %}</div>
+    </nav>
+    {% block main %}{% endblock %}
+  </div>
+  {# 업무 화면(templates/works)을 iframe으로 띄운다. 입력 화면과 상세 화면이 함께 쓴다. #}
+  <dialog id="work-modal" class="modal work-modal" aria-label="업무 화면"><div id="work-modal-body"></div></dialog>
+  {% if root_tab %}<nav class="tabbar" aria-label="주 메뉴">{% include "partials/nav_tabs.html" %}</nav>{% endif %}
+</div>
+{% endblock %}

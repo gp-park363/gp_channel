@@ -1,0 +1,148 @@
+{% extends "page.html" %}
+{% from "partials/icons.html" import icon %}
+{% block title %}{{ channel.name }} 설정 · 바로채널{% endblock %}
+{% block content %}
+<a class="back" href="/groups/{{ channel.group_id }}/settings">{{ icon("back") }}{{ channel.group.name }}</a>
+<h1>{{ channel.name }} <span class="tag blue">{{ CHANNEL_TYPES[channel.type] }}</span></h1>
+<form class="section stack" hx-post="/channels/{{ channel.id }}/settings">
+  <h2>기본 정보</h2>
+  <label>채널 이름 <input name="name" value="{{ channel.name }}" required maxlength="100"></label>
+  <label>글 고정 개수 <input type="number" name="pin_limit" value="{{ channel.pin_limit }}" min="0" max="50" required></label>
+  <button class="primary">저장</button>
+</form>
+{% if channel.type == "approval" %}
+{% if stalled %}
+<section class="section stack">
+  <h2>멈춘 결재 <span class="muted">{{ stalled|length }}건</span></h2>
+  <p class="muted">승인자가 비활성이라 진행할 수 없는 결재입니다. 폐기하면 되돌릴 수 없고 문서는 보존됩니다. 기안자는 참조 상신으로 다시 올릴 수 있습니다.</p>
+  {% for row in stalled %}
+  <form class="stack" hx-post="/approvals/{{ row.post_id }}/discard" hx-confirm="이 결재를 폐기할까요? 되돌릴 수 없습니다.">
+    <strong>{{ row.title }}</strong>
+    <span class="muted">기안 {{ row.drafter_name }} · 비활성 승인자 {{ row.blocked_names|join(", ") }}</span>
+    <input name="reason" required maxlength="1000" placeholder="폐기 사유" aria-label="{{ row.title }} 폐기 사유">
+    <button class="danger">폐기</button>
+  </form>
+  {% endfor %}
+</section>
+{% endif %}
+<section class="section stack">
+  <h2>승인선</h2>
+  <p class="muted">소속별로 등록합니다. 소속에 승인선이 없으면 상위 소속을 따르고, 끝까지 없으면 기안자가 최종 승인합니다.</p>
+  {% if lines %}
+  <ul class="list">
+    {% for row in lines %}
+    <li class="row">
+      <strong>{{ row.department_name }}</strong>
+      <span>{{ row.summary }}</span>
+      <span class="spacer"></span>
+      <button type="button" class="link js-edit-line" data-department="{{ row.department_id }}">수정</button>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  <form class="stack line-picker" hx-post="/channels/{{ channel.id }}/approval-lines"
+        data-lines='{{ line_data|tojson }}' data-candidates="/channels/{{ channel.id }}/approver-candidates">
+    <label>소속
+      <select name="department_id" required>
+        {% for department, depth in tree %}<option value="{{ department.id }}">{{ "　" * depth }}{{ department.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <ol class="line-steps"></ol>
+    <p class="muted line-empty">아직 승인자가 없습니다. 모두 뺀 채로 저장하면 이 소속의 승인선이 삭제됩니다.</p>
+    <div class="line-search">
+      <input type="search" autocomplete="off" placeholder="이름, 이메일, 소속으로 승인자 추가" aria-label="승인자 검색">
+    </div>
+    <input type="hidden" name="approvers">
+    <button class="primary">승인선 저장</button>
+  </form>
+</section>
+<section class="section stack">
+  <h2>발신 대상</h2>
+  <p class="muted">승인이 끝난 결재를 보낼 수 있는 결재 채널입니다. 자동 발신 채널에는 최종 승인 즉시 보냅니다. 나머지는 기안자가 골라 보냅니다.</p>
+  {% if dispatch_targets %}
+  <ul class="list">
+    {% for row, auto in dispatch_targets %}
+    <li class="row">
+      <strong># {{ row.name }}</strong>
+      <span class="spacer"></span>
+      <form class="row" hx-post="/channels/{{ channel.id }}/dispatch-targets">
+        <input type="hidden" name="target_channel_id" value="{{ row.id }}">
+        <label class="check"><input type="checkbox" name="auto_send" value="true"{% if auto %} checked{% endif %} onchange="this.form.requestSubmit()"> 자동 발신</label>
+      </form>
+      <button class="link" hx-post="/channels/{{ channel.id }}/dispatch-targets" hx-vals='{{ {"target_channel_id": row.id, "remove": "true"}|tojson }}'>빼기</button>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if dispatch_choices %}
+  <form class="row wrap" hx-post="/channels/{{ channel.id }}/dispatch-targets">
+    <select name="target_channel_id" aria-label="수신 채널">
+      {% for row, group_name in dispatch_choices %}<option value="{{ row.id }}">{{ group_name }} · # {{ row.name }}</option>{% endfor %}
+    </select>
+    <label class="check"><input type="checkbox" name="auto_send" value="true"> 자동 발신</label>
+    <button>추가</button>
+  </form>
+  {% endif %}
+</section>
+<form class="section stack" hx-post="/channels/{{ channel.id }}/approval-settings">
+  <h2>기본 형식과 게시</h2>
+  <label>기본 형식 (마크다운)<textarea name="template" rows="6" maxlength="50000">{{ channel.approval_template_md or "" }}</textarea></label>
+  <label>기본 게시 채널
+    <select name="default_publish_channel_id">
+      <option value="">지정 안 함</option>
+      {% for row in talk_channels %}<option value="{{ row.id }}"{% if row.id == channel.default_publish_channel_id %} selected{% endif %}>{{ row.name }}</option>{% endfor %}
+    </select>
+  </label>
+  <button class="primary">저장</button>
+</form>
+{% endif %}
+{% if channel.type == "work" %}
+<section class="section stack">
+  <h2>명령어</h2>
+  <p class="muted">명령어마다 열 업무 화면과 외부 시스템의 연동 주소를 등록합니다. 화면은 개발팀이 코드로 배포하고, 화면이 부르는 API는 바로채널이 연동 주소로 중계합니다.
+    채널에는 사용자가 화면에서 [남기고 닫기]를 고른 메시지만 남습니다.
+    허용된 호스트: {% if allowed_hosts %}{{ allowed_hosts|join(", ") }}{% else %}없음 (시스템 관리자가 BARO_INTEGRATION_ALLOWED_HOSTS에 등록해야 합니다){% endif %}</p>
+  {% if work_commands %}
+  <ul class="list command-list">
+    {% for row in work_commands %}
+    <li class="row">
+      <details class="stack">
+        <summary><span class="tag">/{{ row.name }}</span> <strong>{{ row.label }}</strong> <span class="tag">{{ row.screen }}/{{ row.page }}</span>{% if row.archived_at %} <span class="tag">보관됨</span>{% endif %} <span class="muted">{{ row.endpoint_url }}</span></summary>
+        <form class="stack" hx-post="/work-commands/{{ row.id }}">
+          <label>표시 이름 <input name="label" value="{{ row.label }}" required maxlength="100"></label>
+          <label>설명 <input name="description" value="{{ row.description }}" maxlength="300"></label>
+          {% with selected = row.screen ~ "/" ~ row.page %}{% include "partials/work_screen_select.html" %}{% endwith %}
+          <label>연동 주소 <input name="endpoint_url" type="url" value="{{ row.endpoint_url }}" required maxlength="500"></label>
+          <label>연동 토큰 <input name="api_token" type="password" autocomplete="new-password" maxlength="200" placeholder="{{ '바꿀 때만 입력' if row.api_token else '없음' }}"></label>
+          <div class="row wrap">
+            <button class="primary">저장</button>
+            <button type="button" hx-post="/work-commands/{{ row.id }}/archive"{% if not row.archived_at %} hx-confirm="/{{ row.name }} 명령어를 보관할까요? 지난 기록은 남습니다."{% endif %}>{{ "다시 사용" if row.archived_at else "보관" }}</button>
+          </div>
+        </form>
+        <div class="stack">
+          <p class="muted">서버 훅(외부 시스템이 직접 메시지 남기기): {{ "사용 중" if row.webhook_secret else "꺼짐" }}</p>
+          <div class="row wrap">
+            <button type="button" hx-post="/work-commands/{{ row.id }}/webhook" hx-target="#webhook-{{ row.id }}" hx-swap="innerHTML"{% if row.webhook_secret %} hx-confirm="새 키를 발급하면 지금 키는 바로 못 씁니다. 발급할까요?"{% endif %}>{{ "키 다시 발급" if row.webhook_secret else "훅 키 발급" }}</button>
+            {% if row.webhook_secret %}<button type="button" hx-post="/work-commands/{{ row.id }}/webhook/delete" hx-confirm="서버 훅을 끌까요?">훅 끄기</button>{% endif %}
+          </div>
+          <div id="webhook-{{ row.id }}"></div>
+        </div>
+      </details>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  <form class="stack" hx-post="/channels/{{ channel.id }}/work-commands">
+    <h3>새 명령어</h3>
+    <label>명령어 이름 <input name="name" required maxlength="31" pattern="/?[a-z0-9가-힣_\-]{1,30}" placeholder="add"></label>
+    {% with selected = "" %}{% include "partials/work_screen_select.html" %}{% endwith %}
+    <label>표시 이름 <input name="label" required maxlength="100" placeholder="할 일 등록"></label>
+    <label>설명 <input name="description" maxlength="300"></label>
+    <label>연동 주소 <input name="endpoint_url" type="url" required maxlength="500" placeholder="http://127.0.0.1:8100/todos"></label>
+    <label>연동 토큰 <input name="api_token" type="password" autocomplete="new-password" maxlength="200"></label>
+    <button class="primary">등록</button>
+  </form>
+</section>
+{% endif %}
+<section class="section">{% include "partials/grants.html" %}</section>
+{% endblock %}

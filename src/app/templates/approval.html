@@ -1,0 +1,44 @@
+{% extends "channel_page.html" %}
+{% from "partials/icons.html" import icon %}
+{% from "partials/approval_planner.html" import approval_planner %}
+{% block title %}{{ v.approval.approval.title }} · 바로채널{% endblock %}
+{% block content %}
+<a class="back" href="/channels/{{ channel.id }}">{{ icon("back") }}{{ channel.name }}</a>
+{% include "partials/post_card.html" %}
+{% if v.approval.can_submit and planner %}
+<form class="section stack" hx-post="/approvals/{{ v.post.id }}/submit" hx-swap="none"
+      hx-on::after-request="if (event.detail.successful) location.reload()">
+  <h2>상신</h2>
+  {{ approval_planner(planner) }}
+  <button class="primary">기안 승인 (상신)</button>
+</form>
+{% endif %}
+{% if v.approval.can_publish %}
+<form class="section stack" hx-post="/approvals/{{ v.post.id }}/publish">
+  <h2>소통 채널에 게시</h2>
+  {% if publish_targets %}
+  <label>채널
+    <select name="channel_id">
+      {% for row in publish_targets %}<option value="{{ row.id }}"{% if row.id == default_target %} selected{% endif %}>{{ row.name }}</option>{% endfor %}
+    </select>
+  </label>
+  <label class="check"><input type="checkbox" name="include_attachments" value="true"> 첨부 포함</label>
+  <button class="primary">게시</button>
+  {% else %}
+  <p class="muted">쓰기 권한이 있는 소통 채널이 없습니다.</p>
+  {% endif %}
+</form>
+{% endif %}
+{% if dispatch_targets %}
+<form class="section stack" hx-post="/approvals/{{ v.post.id }}/dispatch" hx-confirm="고른 채널로 발신할까요? 되돌릴 수 없습니다.">
+  <h2>다른 결재 채널로 발신</h2>
+  <p class="muted">받은 채널에서 수신 완료를 체크하면 그 채널의 승인선으로 결재가 이어집니다.</p>
+  {% for row, auto in dispatch_targets %}
+  <label class="check"><input type="checkbox" name="channel_ids" value="{{ row.id }}"> # {{ row.name }}{% if auto %} (자동 발신 채널){% endif %}</label>
+  {% endfor %}
+  <button class="primary">발신</button>
+</form>
+{% endif %}
+{% if v.approval.approval.published_post_id %}<p class="muted">소통 채널에 게시했습니다.</p>{% endif %}
+{% if show_thread %}<div hidden data-auto-thread="/posts/{{ v.post.id }}/thread"></div>{% endif %}
+{% endblock %}

@@ -1,0 +1,49 @@
+# BARO_DOMAIN(예: gw.goodpackage.co.kr)은 Cloudflare DNS 인증으로 Let's Encrypt 인증서를 받는다.
+# 서버를 외부에 열 필요가 없고, 루트 인증서를 PC마다 등록할 필요도 없다.
+{
+	# IP로 접속하면 브라우저가 서버 이름(SNI)을 보내지 않는다. 그때 쓸 인증서 이름이다.
+	# docker-compose.yml이 BARO_VPN_IP가 있으면 그 IP, 없으면 BARO_DOMAIN을 넘긴다.
+	default_sni {$BARO_DEFAULT_SNI}
+	# 80·443 대신 다른 포트로 열 때(예: QNAP NAS). docker-compose.yml이 같은 값을 넘긴다.
+	# HTTPS 포트는 https_port가 아니라 아래 사이트 주소에 적는다. https_port로 정하면 Caddy가
+	# 포트포워딩 환경으로 보고 HTTP→HTTPS 리다이렉트 주소에서 포트를 빼 버린다.
+	http_port {$BARO_HTTP_PORT:80}
+}
+
+(app) {
+	# 업로드 한도(BARO_MAX_UPLOAD_MB × 파일 수)보다 넉넉하게 둔다.
+	request_body {
+		max_size 300MB
+	}
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+	# Caddy가 X-Forwarded-Proto를 넘기므로 앱은 https 주소로 리다이렉트와 링크를 만든다.
+	# 실시간 알림(SSE)은 Caddy가 자동으로 바로바로 흘려보낸다.
+	reverse_proxy app:8000
+}
+
+{$BARO_DOMAIN}:{$BARO_HTTPS_PORT:443} {
+	tls {
+		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+		# 사내 DNS가 아니라 공용 DNS로 TXT 레코드 반영을 확인한다.
+		resolvers 1.1.1.1
+	}
+	import app
+}
+
+# VPN(Tailscale)으로 도메인 없이 IP로 들어올 때. 예: https://100.x.y.z:8888
+# Caddy 자체 CA 인증서라 접속하는 기기마다 caddy-root.crt를 등록해야 경고가 사라진다.
+# BARO_VPN_IP가 없으면 127.0.0.1이 되어 아무 영향이 없다.
+{$BARO_VPN_IP:127.0.0.1}:{$BARO_HTTPS_PORT:443} {
+	tls internal
+	import app
+}
+
+# 이 PC에서 확인할 때 쓰는 주소. Caddy 자체 CA 인증서라 등록하지 않으면 경고가 뜬다.
+localhost:{$BARO_HTTPS_PORT:443} {
+	tls internal
+	import app
+}

@@ -1,0 +1,50 @@
+<article id="post-{{ v.post.id }}" class="card{% if v.is_deleted %} deleted{% endif %}" sse-swap="post-{{ v.post.id }}" hx-swap="outerHTML" hx-target="this">
+  {% if v.is_deleted %}
+  <p class="muted">삭제된 글</p>
+  {% else %}
+  <header>
+    <strong>{{ v.author_name }}</strong>
+    <time>{{ v.post.created_at|time }}</time>
+    {% if v.post.edited_at %}<span class="muted">수정됨</span>{% endif %}
+    {% if v.post.pinned_at %}<span class="tag blue">고정</span>{% endif %}
+    {% if v.approval %}<span class="tag blue">{{ v.approval.status_label }}</span>{% endif %}
+  </header>
+  {% if v.post.title and not v.is_reply and not v.work %}<h3 class="approval-title"><a href="/posts/{{ v.post.id }}">{{ v.post.title }}</a></h3>{% endif %}
+  {% if v.approval %}<h3 class="approval-title"><a href="/approvals/{{ v.post.id }}">{{ v.approval.approval.title }}</a></h3>{% endif %}
+  {% if v.work %}{% include "partials/work_block.html" %}{% else %}<div class="body">{{ v.body_html|safe }}</div>{% endif %}
+  {% include "partials/attachment_list.html" %}
+  {% if v.approval %}{% include "partials/approval_block.html" %}{% endif %}
+  {% if v.poll %}{% include "partials/poll_block.html" %}{% endif %}
+  {% if v.ack_total %}
+  <details class="ack-status">
+    <summary>{{ v.ack_done }}/{{ v.ack_total }} 확인</summary>
+    <p class="muted">{% if v.pending_names %}미확인: {{ v.pending_names|join(", ") }}{% else %}모두 확인했습니다.{% endif %}</p>
+  </details>
+  {% endif %}
+  {% if v.can_ack %}<button class="primary ack-button" hx-post="/posts/{{ v.post.id }}/ack">읽음 확인</button>{% endif %}
+  <div class="reactions">
+    {% for r in v.reactions %}
+    <button class="chip{% if r.mine %} mine{% endif %}" title="{{ r.names|join(', ') }}" {% if v.can_react %}hx-post="/posts/{{ v.post.id }}/reactions" hx-vals='{{ {"emoji": r.emoji}|tojson }}'{% else %}disabled{% endif %}>{{ r.emoji }} {{ r.names|length }}</button>
+    {% endfor %}
+    {% if v.can_react %}
+    <details class="emoji-menu">
+      <summary aria-label="반응 추가">＋</summary>
+      <div>
+        {% for emoji in ["👍", "❤️", "😄", "🎉", "👀", "✅"] %}
+        <button hx-post="/posts/{{ v.post.id }}/reactions" hx-vals='{{ {"emoji": emoji}|tojson }}'>{{ emoji }}</button>
+        {% endfor %}
+      </div>
+    </details>
+    {% endif %}
+  </div>
+  {% endif %}
+  <footer>
+    {% if v.can_open_thread %}
+    <button class="link" hx-get="/posts/{{ v.post.id }}/thread" hx-target="#thread" hx-swap="innerHTML">답글 {{ v.reply_count }}개</button>
+    {% endif %}
+    {% if v.can_edit %}<button class="link" hx-get="/posts/{{ v.post.id }}/edit">수정</button>{% endif %}
+    {% if v.can_delete %}<button class="link" hx-post="/posts/{{ v.post.id }}/delete" hx-confirm="이 글을 삭제할까요?">삭제</button>{% endif %}
+    {% if v.post.title and v.post.edited_at and not v.is_reply %}<a class="link" href="/posts/{{ v.post.id }}/revisions">이전 버전</a>{% endif %}
+    {% if v.can_pin %}<button class="link" hx-post="/posts/{{ v.post.id }}/pin">{{ "고정 해제" if v.post.pinned_at else "고정" }}</button>{% endif %}
+  </footer>
+</article>
