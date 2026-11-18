@@ -41,11 +41,26 @@ die() { printf '오류: %s\n' "$*" >&2; exit 1; }
 remote_sh() {
   local args="'$NAS_DIR'" a
   for a in "$@"; do args+=" '$a'"; done
-  { printf '%s\n' "$PRELUDE"; cat; } | "$NAS_SSH" "${SSH_OPTS[@]}" "$NAS_HOST" "sh -s -- $args"
+  local rc=0
+  { printf '%s\n' "$PRELUDE"; cat; } | "$NAS_SSH" "${SSH_OPTS[@]}" "$NAS_HOST" "sh -s -- $args" || rc=$?
+  ssh_check "$rc"
+  return "$rc"
 }
 
 # 한 줄 명령을 NAS에서 돌린다(표준 입력을 넘길 때 쓴다).
-remote_cmd() { "$NAS_SSH" "${SSH_OPTS[@]}" "$NAS_HOST" "$1"; }
+remote_cmd() {
+  local rc=0
+  "$NAS_SSH" "${SSH_OPTS[@]}" "$NAS_HOST" "$1" || rc=$?
+  ssh_check "$rc"
+  return "$rc"
+}
+
+# ssh는 접속이나 로그인에 실패하면 255로 끝난다. 원격 명령의 실패와 구분해 바로 알린다.
+ssh_check() {
+  (($1 == 255)) || return 0
+  die "SSH로 $NAS_HOST 에 접속하지 못했습니다. 비밀번호를 확인하세요.
+  여러 번 틀리면 QTS가 이 PC의 IP를 잠시 차단할 수 있습니다(제어판 → 보안 → IP 접근 보호)."
+}
 
 usage() {
   cat <<EOF
