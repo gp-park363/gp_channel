@@ -285,33 +285,52 @@ cmd_deploy() { cmd_push; cmd_up; }
 # NAS에서 빌드가 실패할 때 쓴다. 이 PC에서 커밋된 HEAD로 앱 이미지를 만들어 보낸다.
 # QNAP의 docker(27.1.2-qnap8)는 python 기반 이미지의 작은 층(디렉터리·심볼릭 링크만 든 층)을
 # "failed to register layer: archive/tar: invalid tar header"로 거부한다. 같은 버전의 원래
-# docker는 문제없이 받으므로 QNAP 쪽 문제다. 그래서 이미지를 한 층으로 합쳐(docker export) 보내고
-# NAS에서 docker import로 다시 만든다. 이때 빠지는 실행 설정(ENV, CMD, USER 등)은 --change로
-# 옮기고, HEALTHCHECK는 docker-compose.yml에 있다. compose가 찾는 이름(<프로젝트>-app)을 붙인다.
+# docker는 문제없이 받으므로 QNAP 쪽 문제다. docker import도 연결이 끊긴다(connection reset).
+# 그래서 컨테이너 파일 시스템을 한 층으로 합친(docker export) docker load용 묶음을 이 PC에서
+# 직접 만들어 보낸다. 실행 설정(ENV, CMD, USER, HEALTHCHECK 등)은 원래 이미지 설정을 그대로 쓴다.
+# compose가 찾는 이름(<프로젝트>-app:latest)을 붙인다.
 cmd_ship() {
   cmd_push
-  local project image tag cid changes
+  local project image tag cid work config
   project="$(basename "$NAS_DIR" | tr '[:upper:]' '[:lower:]')"
   image="$project-app"
   tag="$image:nas-$(git rev-parse --short HEAD)"
   say "이 PC에서 앱 이미지 빌드 ($tag)"
   git archive HEAD | docker build --platform linux/amd64 -t "$tag" -
-  changes="$(docker image inspect -f '{{json .Config}}' "$tag" | python3 -c '
-import json, shlex, sys
-c = json.load(sys.stdin)
-out = ["ENV " + e for e in c.get("Env") or []]
-if c.get("Entrypoint"): out.append("ENTRYPOINT " + json.dumps(c["Entrypoint"]))
-if c.get("Cmd"): out.append("CMD " + json.dumps(c["Cmd"]))
-if c.get("User"): out.append("USER " + c["User"])
-if c.get("WorkingDir"): out.append("WORKDIR " + c["WorkingDir"])
-out += ["EXPOSE " + p for p in c.get("ExposedPorts") or {}]
-print(" ".join("--change " + shlex.quote(x) for x in out))
-')"
-  say "NAS로 이미지 보내기 ($(docker image inspect -f '{{.Size}}' "$tag" | awk '{printf "%d MB", $1/1048576}'), 한 층으로 합쳐 압축 전송)"
+
+  say "한 층으로 합치기"
+  work="$(mktemp -d)"
   cid="$(docker create "$tag")"
-  trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' RETURN
-  docker export "$cid" | gzip -1 |
-    remote_cmd "cd '$NAS_DIR' && DOCKER_CONFIG='$NAS_DIR/.docker' && export DOCKER_CONFIG && mkdir -p \"\$DOCKER_CONFIG\" && docker import $changes - '$image:latest'"
+  trap 'docker rm -f "$cid" >/dev/null 2>&1 || true; [[ -d "$work" ]] && rm -r -- "$work"' RETURN
+  docker export "$cid" >"$work/layer.tar"
+  config="$(docker image inspect "$tag" | python3 -c '
+import hashlib, json, os, sys
+work, ref = sys.argv[1], sys.argv[2]
+info = json.load(sys.stdin)[0]
+digest = hashlib.sha256()
+with open(os.path.join(work, "layer.tar"), "rb") as f:
+    for chunk in iter(lambda: f.read(1 << 20), b""):
+        digest.update(chunk)
+config = {
+    "architecture": info["Architecture"],
+    "os": info["Os"],
+    "created": info["Created"],
+    "config": info["Config"],
+    "rootfs": {"type": "layers", "diff_ids": ["sha256:" + digest.hexdigest()]},
+    "history": [{"created": info["Created"], "created_by": "deploy/nas.sh ship (flattened)"}],
+}
+data = json.dumps(config).encode()
+name = hashlib.sha256(data).hexdigest() + ".json"
+with open(os.path.join(work, name), "wb") as f:
+    f.write(data)
+with open(os.path.join(work, "manifest.json"), "w") as f:
+    json.dump([{"Config": name, "RepoTags": [ref], "Layers": ["layer.tar"]}], f)
+print(name)
+' "$work" "$image:latest")"
+
+  say "NAS로 이미지 보내기 ($(du -m "$work/layer.tar" | cut -f1) MB, 압축 전송)"
+  tar -C "$work" -cf - manifest.json "$config" layer.tar | gzip -1 |
+    remote_cmd "cd '$NAS_DIR' && DOCKER_CONFIG='$NAS_DIR/.docker' && export DOCKER_CONFIG && mkdir -p \"\$DOCKER_CONFIG\" && docker load"
   cmd_up image
 }
 
