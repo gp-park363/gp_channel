@@ -27,6 +27,11 @@ DIR="$1"; shift
 CS=$(getcfg container-station Install_Path -f /etc/config/qpkg.conf 2>/dev/null || true)
 if [ -n "$CS" ]; then PATH="$PATH:$CS/bin:$CS/usr/bin:$CS/usr/local/bin"; fi
 export PATH
+# Container Station의 docker는 사용자 설정을 .qpkg/container-station/homes/<사용자>에 만들려 하는데,
+# admin이 아닌 계정은 그곳에 쓸 수 없어 빌드(buildx)가 멈춘다. 설치 폴더 안으로 돌린다.
+if [ -z "${DOCKER_CONFIG:-}" ] && [ -d "$DIR" ] && [ -w "$DIR" ]; then
+  DOCKER_CONFIG="$DIR/.docker"; mkdir -p "$DOCKER_CONFIG"; export DOCKER_CONFIG
+fi
 '
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
@@ -57,6 +62,8 @@ usage() {
   deploy     push + up (커밋된 코드를 보내고 다시 빌드해 띄운다)
   push       커밋된 코드(HEAD)만 NAS로 보낸다
   up         NAS에서 백업 후 빌드하고 띄운 뒤 접속을 확인한다
+  ship       push + 앱 이미지를 이 PC에서 빌드해 NAS로 보내고 띄운다
+             (NAS에서 빌드가 실패할 때. 예: invalid tar header)
 
 운영:
   status     배포된 커밋, 컨테이너 상태, 접속 확인
@@ -206,17 +213,24 @@ cmd_push() {
   echo "보냄: $rev"
 }
 
+# $1: build(기본, NAS에서 빌드) 또는 image(ship으로 보낸 이미지를 그대로 쓴다)
 cmd_up() {
-  say "NAS에서 빌드하고 띄우기"
-  remote_sh <<'EOF'
+  local mode="${1:-build}"
+  say "NAS에서 띄우기 ($mode)"
+  remote_sh "$mode" <<'EOF'
 cd "$DIR"
 [ -f .env ] || { echo ".env가 없습니다. 먼저 deploy/nas.sh env" >&2; exit 1; }
 if [ -n "$(docker compose --profile app ps -q --status running app 2>/dev/null)" ]; then
   echo "-- 띄우기 전 백업"
   bash deploy/backup.sh
 fi
-echo "-- 빌드하고 띄우기 (처음에는 몇 분 걸린다)"
-docker compose --profile app up -d --build
+if [ "$1" = image ]; then
+  echo "-- 이 PC에서 보낸 이미지로 띄우기"
+  docker compose --profile app up -d --no-build
+else
+  echo "-- 빌드하고 띄우기 (처음에는 몇 분 걸린다)"
+  docker compose --profile app up -d --build
+fi
 echo "-- 앱이 준비되기를 기다리는 중"
 id=$(docker compose --profile app ps -q app)
 i=0; state=""
@@ -246,6 +260,22 @@ check_url() {
 }
 
 cmd_deploy() { cmd_push; cmd_up; }
+
+# NAS에서 이미지를 받다가 깨지는 경우(failed to register layer: invalid tar header 등)를 피해
+# 이 PC에서 커밋된 HEAD로 앱 이미지를 만들어 보낸다. compose가 찾는 이름(<프로젝트>-app)으로 붙인다.
+cmd_ship() {
+  cmd_push
+  local project image tag
+  project="$(basename "$NAS_DIR" | tr '[:upper:]' '[:lower:]')"
+  image="$project-app"
+  tag="$image:nas-$(git rev-parse --short HEAD)"
+  say "이 PC에서 앱 이미지 빌드 ($tag)"
+  git archive HEAD | docker build --platform linux/amd64 -t "$tag" -
+  say "NAS로 이미지 보내기 ($(docker image inspect -f '{{.Size}}' "$tag" | awk '{printf "%d MB", $1/1048576}'), 압축해서 전송)"
+  docker save "$tag" | gzip -1 |
+    remote_cmd "cd '$NAS_DIR' && DOCKER_CONFIG='$NAS_DIR/.docker' && export DOCKER_CONFIG && mkdir -p \"\$DOCKER_CONFIG\" && docker load && docker tag '$tag' '$image:latest'"
+  cmd_up image
+}
 
 cmd_status() {
   say "NAS 상태"
@@ -325,6 +355,7 @@ case "${1:-}" in
   push) cmd_push ;;
   up) cmd_up ;;
   deploy) cmd_deploy ;;
+  ship) cmd_ship ;;
   status) cmd_status ;;
   logs) shift; cmd_logs "$@" ;;
   backup) cmd_backup ;;

@@ -31,6 +31,7 @@
 
 ```bash
 deploy/nas.sh deploy          # 코드를 고치고 커밋한 뒤: push + (백업 후) 다시 빌드
+deploy/nas.sh ship            # deploy와 같지만 앱 이미지를 이 PC에서 빌드해 보낸다(NAS 빌드가 실패할 때)
 deploy/nas.sh status          # 배포된 커밋, 컨테이너 상태, 접속 확인
 deploy/nas.sh logs app 200    # 앱 로그 200줄 (서비스: app, postgres, minio)
 deploy/nas.sh backup          # 지금 백업
@@ -398,6 +399,8 @@ PC에서 확인:
 | `http://192.168.0.114:8000`이 안 열림 | `docker compose --profile app ps`에서 app 포트가 `0.0.0.0:8000`인지, QuFirewall, NAS IP가 바뀌었는지 |
 | 로그인 후 바로 로그인 화면으로 돌아옴 | 1차: `COMPOSE_FILE`이 빠져 쿠키가 HTTPS 전용이다. 2차: HTTPS 주소로 들어왔는지 |
 | `app`이 healthy가 안 됨 | `docker compose logs app`. `password authentication failed`면 DB를 만든 뒤 `BARO_DB_PASSWORD`를 바꾼 경우다(4장) |
+| `mkdir …/.qpkg/container-station/homes/<사용자>: permission denied` (빌드 중) | Container Station의 docker가 admin만 쓸 수 있는 곳에 사용자 설정을 만들려는 것이다. `deploy/nas.sh`는 알아서 피한다. NAS에서 직접 `docker compose`를 쓸 때는 먼저 `export DOCKER_CONFIG=/share/barochannel/.docker` |
+| 빌드 중 `failed to register layer: archive/tar: invalid tar header` | NAS가 받은 이미지 데이터가 깨진 것이다. `deploy/nas.sh ship`으로 이 PC에서 빌드한 앱 이미지를 보내 띄운다. NAS에서 고치려면 `docker builder prune -f` 뒤 다시 `up`, 그래도 같으면 Container Station의 레지스트리 미러 설정을 확인한다 |
 | `!override` 관련 오류 | Docker Compose 2.24 이상이 필요하다(NAS는 2.29.1). Container Station을 업데이트한다 |
 | 2차: Caddy가 Restarting 반복 | `docker compose logs caddy`. 토큰이 비었거나 틀리면 `provision tls.issuance.acme` 오류가 난다 |
 | 2차: `timed out waiting for record to fully propagate` | NAS에서 1.1.1.1:53으로 나가는 연결이 막혔는지 본다 |
