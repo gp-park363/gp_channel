@@ -45,7 +45,10 @@ remote_sh() {
   local args="'$NAS_DIR'" a
   for a in "$@"; do args+=" '$a'"; done
   local rc=0
-  { printf '%s\n' "$PRELUDE"; cat; } | "$NAS_SSH" "${SSH_OPTS[@]}" "$NAS_HOST" "sh -s -- $args" || rc=$?
+  # 스크립트를 끝까지 읽은 뒤 실행한다(sh -s로 한 줄씩 읽으면 docker compose exec 같은 명령이
+  # 표준 입력에 남은 스크립트를 삼켜 뒤쪽 명령이 실행되지 않는다).
+  { printf '%s\n' "$PRELUDE"; cat; } |
+    "$NAS_SSH" "${SSH_OPTS[@]}" "$NAS_HOST" "sh -c 'eval \"\$(cat)\"' sh $args" || rc=$?
   ssh_check "$rc"
   return "$rc"
 }
@@ -95,7 +98,7 @@ EOF
 # 설치 폴더는 QTS 공유 폴더로 미리 만들어 둔다. /share 바로 아래에 mkdir로 만들면
 # 데이터 디스크가 아니라 시스템 영역에 생겨 재부팅 때 사라질 수 있어 스크립트가 만들지 않는다.
 require_dir() {
-  remote_cmd "test -d '$NAS_DIR' && test -w '$NAS_DIR'" ||
+  remote_cmd "test -d '$NAS_DIR' && test -w '$NAS_DIR'" </dev/null ||
     die "$NAS_DIR 이 없거나 쓸 수 없습니다. QTS에서 공유 폴더를 만들고 권한을 주세요(deploy_qnap.md 2.5)."
 }
 
@@ -155,7 +158,7 @@ EOF
 cmd_env() {
   say "NAS .env 만들기 ($NAS_HOST:$NAS_DIR/.env)"
   require_dir
-  if remote_cmd "test -e '$NAS_DIR/.env'"; then
+  if remote_cmd "test -e '$NAS_DIR/.env'" </dev/null; then
     die "NAS에 .env가 이미 있습니다. 덮어쓰지 않습니다. 고치려면 NAS에서 직접 편집하세요."
   fi
   local email password password2 company tmp
@@ -279,19 +282,36 @@ check_url() {
 
 cmd_deploy() { cmd_push; cmd_up; }
 
-# NAS에서 이미지를 받다가 깨지는 경우(failed to register layer: invalid tar header 등)를 피해
-# 이 PC에서 커밋된 HEAD로 앱 이미지를 만들어 보낸다. compose가 찾는 이름(<프로젝트>-app)으로 붙인다.
+# NAS에서 빌드가 실패할 때 쓴다. 이 PC에서 커밋된 HEAD로 앱 이미지를 만들어 보낸다.
+# QNAP의 docker(27.1.2-qnap8)는 python 기반 이미지의 작은 층(디렉터리·심볼릭 링크만 든 층)을
+# "failed to register layer: archive/tar: invalid tar header"로 거부한다. 같은 버전의 원래
+# docker는 문제없이 받으므로 QNAP 쪽 문제다. 그래서 이미지를 한 층으로 합쳐(docker export) 보내고
+# NAS에서 docker import로 다시 만든다. 이때 빠지는 실행 설정(ENV, CMD, USER 등)은 --change로
+# 옮기고, HEALTHCHECK는 docker-compose.yml에 있다. compose가 찾는 이름(<프로젝트>-app)을 붙인다.
 cmd_ship() {
   cmd_push
-  local project image tag
+  local project image tag cid changes
   project="$(basename "$NAS_DIR" | tr '[:upper:]' '[:lower:]')"
   image="$project-app"
   tag="$image:nas-$(git rev-parse --short HEAD)"
   say "이 PC에서 앱 이미지 빌드 ($tag)"
   git archive HEAD | docker build --platform linux/amd64 -t "$tag" -
-  say "NAS로 이미지 보내기 ($(docker image inspect -f '{{.Size}}' "$tag" | awk '{printf "%d MB", $1/1048576}'), 압축해서 전송)"
-  docker save "$tag" | gzip -1 |
-    remote_cmd "cd '$NAS_DIR' && DOCKER_CONFIG='$NAS_DIR/.docker' && export DOCKER_CONFIG && mkdir -p \"\$DOCKER_CONFIG\" && docker load && docker tag '$tag' '$image:latest'"
+  changes="$(docker image inspect -f '{{json .Config}}' "$tag" | python3 -c '
+import json, shlex, sys
+c = json.load(sys.stdin)
+out = ["ENV " + e for e in c.get("Env") or []]
+if c.get("Entrypoint"): out.append("ENTRYPOINT " + json.dumps(c["Entrypoint"]))
+if c.get("Cmd"): out.append("CMD " + json.dumps(c["Cmd"]))
+if c.get("User"): out.append("USER " + c["User"])
+if c.get("WorkingDir"): out.append("WORKDIR " + c["WorkingDir"])
+out += ["EXPOSE " + p for p in c.get("ExposedPorts") or {}]
+print(" ".join("--change " + shlex.quote(x) for x in out))
+')"
+  say "NAS로 이미지 보내기 ($(docker image inspect -f '{{.Size}}' "$tag" | awk '{printf "%d MB", $1/1048576}'), 한 층으로 합쳐 압축 전송)"
+  cid="$(docker create "$tag")"
+  trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' RETURN
+  docker export "$cid" | gzip -1 |
+    remote_cmd "cd '$NAS_DIR' && DOCKER_CONFIG='$NAS_DIR/.docker' && export DOCKER_CONFIG && mkdir -p \"\$DOCKER_CONFIG\" && docker import $changes - '$image:latest'"
   cmd_up image
 }
 
@@ -328,7 +348,7 @@ cmd_migrate() {
   local answer name
   read -rp "계속하려면 yes를 입력하세요: " answer
   [[ "$answer" == yes ]] || die "취소했습니다."
-  remote_cmd "test -f '$NAS_DIR/.env' && test -f '$NAS_DIR/deploy/restore.sh'" ||
+  remote_cmd "test -f '$NAS_DIR/.env' && test -f '$NAS_DIR/deploy/restore.sh'" </dev/null ||
     die "NAS에 코드와 .env가 있어야 합니다. 먼저 push, env를 하세요."
 
   name="to-nas-$(date +%Y%m%d-%H%M%S)"

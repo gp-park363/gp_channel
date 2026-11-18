@@ -57,6 +57,14 @@ services:
       BARO_INTEGRATION_ALLOWED_HOSTS: ${BARO_INTEGRATION_ALLOWED_HOSTS:-}
       # 앱 포트는 외부에 열지 않고 Caddy만 붙으므로, 내부망에서 온 X-Forwarded-* 헤더를 믿는다.
       FORWARDED_ALLOW_IPS: "*"
+    # Dockerfile의 HEALTHCHECK와 같다. deploy/nas.sh ship은 이미지를 한 층으로 합쳐 보내는데
+    # (docker import) 그때 HEALTHCHECK가 빠지므로 여기에도 둔다.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 5
     depends_on:
       postgres:
         condition: service_healthy
