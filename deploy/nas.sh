@@ -340,9 +340,33 @@ with open(os.path.join(work, "manifest.json"), "w") as f:
 print(name)
 ' "$work" "$image:latest")"
 
-  say "NAS로 이미지 보내기 ($(du -m "$work/layer.tar" | cut -f1) MB, 압축 전송)"
-  tar -C "$work" -cf - manifest.json "$config" layer.tar | gzip -1 |
-    remote_cmd "cd '$NAS_DIR' && DOCKER_CONFIG='$NAS_DIR/.docker' && export DOCKER_CONFIG && mkdir -p \"\$DOCKER_CONFIG\" && docker load"
+  tar -C "$work" -cf - manifest.json "$config" layer.tar | gzip -1 >"$work/image.tar.gz"
+  rm -- "$work/layer.tar"
+
+  # 바로 docker load로 흘려보내면 어디서 깨졌는지 알 수 없다. NAS의 파일로 먼저 옮겨 체크섬을
+  # 맞춘 뒤(전송 확인) 그 파일을 docker load한다(NAS docker 확인).
+  local sum remote_sum try
+  sum="$(sha256sum "$work/image.tar.gz" | cut -d' ' -f1)"
+  for try in 1 2 3; do
+    say "NAS로 이미지 보내기 ($(du -m "$work/image.tar.gz" | cut -f1) MB, ${try}번째)"
+    remote_cmd "mkdir -p '$NAS_DIR/.ship' && cat > '$NAS_DIR/.ship/image.tar.gz'" <"$work/image.tar.gz"
+    remote_sum="$(remote_cmd "sha256sum '$NAS_DIR/.ship/image.tar.gz' 2>/dev/null || openssl dgst -sha256 -r '$NAS_DIR/.ship/image.tar.gz'" </dev/null | cut -d' ' -f1)"
+    [[ "$remote_sum" == "$sum" ]] && break
+    echo "전송 중 파일이 바뀌었습니다(체크섬 다름). 다시 보냅니다." >&2
+    ((try < 3)) || die "세 번 보내도 파일이 온전히 도착하지 않았습니다. 네트워크(SSH 연결)를 확인하세요."
+  done
+  echo "전송 확인: 체크섬 일치 ($sum)"
+
+  say "NAS에서 이미지 불러오기"
+  remote_sh <<'EOF'
+cd "$DIR"
+for try in 1 2; do
+  if docker load -i .ship/image.tar.gz; then rm -f .ship/image.tar.gz; exit 0; fi
+  echo "docker load 실패(${try}번째)" >&2
+done
+echo "파일은 온전히 도착했지만 NAS docker가 불러오지 못했습니다. 파일은 $DIR/.ship/image.tar.gz 에 남겨 둡니다." >&2
+exit 1
+EOF
   cmd_up image
 }
 
