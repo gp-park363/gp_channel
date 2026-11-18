@@ -37,6 +37,9 @@ fi
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 die() { printf '오류: %s\n' "$*" >&2; exit 1; }
 
+# 한 줄 명령(remote_cmd) 앞에 붙인다. PRELUDE와 같은 이유로 docker 경로를 PATH에 넣는다.
+PATH_SETUP='CS=$(getcfg container-station Install_Path -f /etc/config/qpkg.conf 2>/dev/null); [ -n "$CS" ] && PATH="$PATH:$CS/bin:$CS/usr/bin:$CS/usr/local/bin"; export PATH;'
+
 # 표준 입력으로 받은 sh 스크립트를 NAS에서 돌린다. 첫 인자는 설치 폴더($DIR)가 된다.
 remote_sh() {
   local args="'$NAS_DIR'" a
@@ -50,7 +53,7 @@ remote_sh() {
 # 한 줄 명령을 NAS에서 돌린다(표준 입력을 넘길 때 쓴다).
 remote_cmd() {
   local rc=0
-  "$NAS_SSH" "${SSH_OPTS[@]}" "$NAS_HOST" "$1" || rc=$?
+  "$NAS_SSH" "${SSH_OPTS[@]}" "$NAS_HOST" "$PATH_SETUP $1" || rc=$?
   ssh_check "$rc"
   return "$rc"
 }
