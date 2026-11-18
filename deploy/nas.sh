@@ -83,6 +83,8 @@ usage() {
   deploy     push + up (커밋된 코드를 보내고 다시 빌드해 띄운다)
   push       커밋된 코드(HEAD)만 NAS로 보낸다
   up         NAS에서 백업 후 빌드하고 띄운 뒤 접속을 확인한다
+  up image   빌드하지 않고 NAS에 이미 있는 앱 이미지로 띄운다(ship으로 불러온 이미지)
+  pack       NAS 안에서 단계별로 진행할 파일(앱 이미지, 검증 목록)을 .ship/에 만든다
   ship       push + 앱 이미지를 이 PC에서 빌드해 NAS로 보내고 띄운다
              (NAS에서 빌드가 실패할 때. 예: invalid tar header)
 
@@ -294,26 +296,21 @@ check_url() {
 
 cmd_deploy() { cmd_push; cmd_up; }
 
-# NAS에서 빌드가 실패할 때 쓴다. 이 PC에서 커밋된 HEAD로 앱 이미지를 만들어 보낸다.
-# QNAP의 docker(27.1.2-qnap8)는 python 기반 이미지의 작은 층(디렉터리·심볼릭 링크만 든 층)을
-# "failed to register layer: archive/tar: invalid tar header"로 거부한다. 같은 버전의 원래
-# docker는 문제없이 받으므로 QNAP 쪽 문제다. docker import도 연결이 끊긴다(connection reset).
-# 그래서 컨테이너 파일 시스템을 한 층으로 합친(docker export) docker load용 묶음을 이 PC에서
-# 직접 만들어 보낸다. 실행 설정(ENV, CMD, USER, HEALTHCHECK 등)은 원래 이미지 설정을 그대로 쓴다.
-# compose가 찾는 이름(<프로젝트>-app:latest)을 붙인다.
-cmd_ship() {
-  cmd_push
-  local project image tag cid work config
-  project="$(basename "$NAS_DIR" | tr '[:upper:]' '[:lower:]')"
-  image="$project-app"
-  tag="$image:nas-$(git rev-parse --short HEAD)"
+# compose가 찾는 앱 이미지 이름(<프로젝트>-app). 프로젝트 이름은 NAS 설치 폴더 이름이다.
+app_image() { printf '%s-app' "$(basename "$NAS_DIR" | tr '[:upper:]' '[:lower:]')"; }
+
+# 커밋된 HEAD로 앱 이미지를 빌드하고, 한 층으로 합친 docker load용 묶음(gzip)을 만든다.
+# 하위 셸에서 돌려 정리용 trap이 이 함수 안에만 걸리게 한다.
+# $1: 빌드 태그, $2: 묶음 안의 이미지 이름, $3: 만들 파일
+build_bundle() (
+  local tag="$1" ref="$2" out="$3" cid work config
   say "이 PC에서 앱 이미지 빌드 ($tag)"
   git archive HEAD | docker build --platform linux/amd64 -t "$tag" -
 
   say "한 층으로 합치기"
   work="$(mktemp -d)"
   cid="$(docker create "$tag")"
-  trap 'docker rm -f "$cid" >/dev/null 2>&1 || true; [[ -d "$work" ]] && rm -r -- "$work"' RETURN
+  trap 'docker rm -f "$cid" >/dev/null 2>&1 || true; [[ -d "$work" ]] && rm -r -- "$work"' EXIT
   docker export "$cid" >"$work/layer.tar"
   config="$(docker image inspect "$tag" | python3 -c '
 import hashlib, json, os, sys
@@ -338,10 +335,27 @@ with open(os.path.join(work, name), "wb") as f:
 with open(os.path.join(work, "manifest.json"), "w") as f:
     json.dump([{"Config": name, "RepoTags": [ref], "Layers": ["layer.tar"]}], f)
 print(name)
-' "$work" "$image:latest")"
+' "$work" "$ref")"
 
-  tar -C "$work" -cf - manifest.json "$config" layer.tar | gzip -1 >"$work/image.tar.gz"
+  tar -C "$work" -cf - manifest.json "$config" layer.tar | gzip -1 >"$out"
   rm -- "$work/layer.tar"
+)
+
+# NAS에서 빌드가 실패할 때 쓴다. 이 PC에서 커밋된 HEAD로 앱 이미지를 만들어 보낸다.
+# QNAP의 docker(27.1.2-qnap8)는 python 기반 이미지의 작은 층(디렉터리·심볼릭 링크만 든 층)을
+# "failed to register layer: archive/tar: invalid tar header"로 거부한다. 같은 버전의 원래
+# docker는 문제없이 받으므로 QNAP 쪽 문제다. docker import도 연결이 끊긴다(connection reset).
+# 그래서 컨테이너 파일 시스템을 한 층으로 합친(docker export) docker load용 묶음을 이 PC에서
+# 직접 만들어 보낸다. 실행 설정(ENV, CMD, USER, HEALTHCHECK 등)은 원래 이미지 설정을 그대로 쓴다.
+# compose가 찾는 이름(<프로젝트>-app:latest)을 붙인다.
+cmd_ship() {
+  cmd_push
+  local image tag work
+  image="$(app_image)"
+  tag="$image:nas-$(git rev-parse --short HEAD)"
+  work="$(mktemp -d)"
+  trap '[[ -d "$work" ]] && rm -r -- "$work"' RETURN
+  build_bundle "$tag" "$image:latest" "$work/image.tar.gz"
 
   # 바로 docker load로 흘려보내면 어디서 깨졌는지 알 수 없다. NAS의 파일로 먼저 옮겨 체크섬을
   # 맞춘 뒤(전송 확인) 그 파일을 docker load한다(NAS docker 확인).
@@ -368,6 +382,45 @@ echo "파일은 온전히 도착했지만 NAS docker가 불러오지 못했습�
 exit 1
 EOF
   cmd_up image
+}
+
+# NAS 안에서 단계별로 진행할 때 쓸 파일을 이 PC의 .ship/에 만든다(deploy_qnap.md).
+#   app-image.tar.gz  한 층으로 합친 앱 이미지(docker load용)
+#   *.sha256          이미지별 파일 목록(deploy/verify-image.sh check로 NAS 이미지와 비교)
+#   images.txt        NAS에서 받을 이미지의 정확한 버전(digest)과 붙일 이름
+#   SHA256SUMS        보낸 파일이 온전히 도착했는지 확인용
+cmd_pack() {
+  local out=".ship" image tag refs ref name digest
+  image="$(app_image)"
+  tag="$image:nas-$(git rev-parse --short HEAD)"
+  [[ -z "$(git status --porcelain --untracked-files=no)" ]] ||
+    echo "주의: 커밋되지 않은 변경은 이미지에 들어가지 않습니다(커밋된 HEAD로 만듭니다)."
+  mkdir -p "$out"
+  rm -f -- "$out"/app-image.tar.gz "$out"/*.sha256 "$out"/images.txt "$out"/SHA256SUMS
+  build_bundle "$tag" "$image:latest" "$out/app-image.tar.gz"
+
+  say "이미지별 파일 목록 만들기"
+  deploy/verify-image.sh make "$tag" "$out/app.sha256"
+  # 1차 NAS 설정(compose.lan.yml)이 쓰는 저장소 이미지
+  refs="$(BARO_SECRET_KEY=x COMPOSE_FILE="$LAN_COMPOSE_FILE" docker compose --profile app config --images 2>/dev/null |
+    grep -v -- "-app$" | sort -u)"
+  : >"$out/images.txt"
+  for ref in $refs; do
+    name="$(basename "${ref%%[:@]*}")"
+    docker pull -q "$ref" >/dev/null
+    digest="$(docker image inspect -f '{{index .RepoDigests 0}}' "$ref")"
+    printf '%s %s %s\n' "$name" "$digest" "$ref" >>"$out/images.txt"
+    deploy/verify-image.sh make "$ref" "$out/$name.sha256"
+  done
+  (cd "$out" && sha256sum app-image.tar.gz ./*.sha256 images.txt >SHA256SUMS)
+  say "만들었습니다"
+  ls -lh "$out"
+  cat <<EOF
+
+NAS로 보내기(이 PC에서):
+  scp $out/* $NAS_HOST:$NAS_DIR/.ship/
+그다음은 NAS에 접속해 deploy_qnap.md "NAS 안에서 단계별로 진행"을 따릅니다.
+EOF
 }
 
 cmd_status() {
@@ -446,9 +499,12 @@ case "${1:-}" in
   check) cmd_check ;;
   env) cmd_env ;;
   push) cmd_push ;;
-  up) cmd_up ;;
+  up)
+    [[ "${2:-build}" =~ ^(build|image)$ ]] || die "사용법: deploy/nas.sh up [build|image]"
+    cmd_up "${2:-build}" ;;
   deploy) cmd_deploy ;;
   ship) cmd_ship ;;
+  pack) cmd_pack ;;
   status) cmd_status ;;
   logs) shift; cmd_logs "$@" ;;
   backup) cmd_backup ;;

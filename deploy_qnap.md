@@ -41,6 +41,111 @@ deploy/nas.sh backup          # 지금 백업
 - SSH 키를 등록하지 않아도 쓸 수 있다. 연결을 2분 동안 재사용하므로 비밀번호를 명령마다 한 번쯤만 묻는다.
 - 스크립트는 SSH가 되지 않는 환경에서 흉내 내어 시험했다. 실제 NAS에서 처음 돌릴 때는 `check`부터 한 단계씩 결과를 보며 진행한다.
 
+## NAS 안에서 단계별로 진행 (이미지 검증)
+
+이 NAS의 Container Station(docker 27.1.2-qnap8)은 이미지를 풀어 저장할 때 **파일을 오류 없이 망가뜨리는 일이 있다**. 같은 이미지를 이 PC와 NAS에서 `dpkg --verify`로 비교했더니 NAS 쪽만 `postgres:17`에서 4개, 앱 이미지에서 1개 파일이 원본과 달랐다(2026-11-18). PostgreSQL이 `CREATE DATABASE`에서 Segmentation fault로 죽은 것도 이 때문으로 본다. 그래서 `deploy/nas.sh ship`처럼 한 번에 띄우지 않고, NAS에 접속해 **이미지마다 원본과 같은지 확인한 뒤** 띄운다.
+
+검증은 [deploy/verify-image.sh](deploy/verify-image.sh)로 한다. 이 PC에서 이미지의 모든 파일 SHA-256 목록을 만들고(`make`), NAS에서 같은 이미지의 파일과 비교한다(`check`).
+
+### A. 이 PC에서 준비
+
+```bash
+git status                                     # 변경을 커밋해 둔다
+deploy/nas.sh push                             # 코드(검증 스크립트, 1차 설정 포함)를 NAS로
+deploy/nas.sh pack                             # .ship/에 앱 이미지·검증 목록·이미지 버전을 만든다
+scp .ship/* gp@192.168.0.114:/share/barochannel/.ship/
+```
+
+`.ship/`에 생기는 파일:
+
+| 파일 | 내용 |
+|---|---|
+| `app-image.tar.gz` | 한 층으로 합친 앱 이미지(docker load용, 약 100MB) |
+| `app.sha256`, `postgres.sha256`, `minio.sha256` | 이미지별 파일 목록과 SHA-256 |
+| `images.txt` | NAS에서 받을 PostgreSQL·MinIO 이미지의 정확한 버전(digest) |
+| `SHA256SUMS` | 위 파일들이 온전히 도착했는지 확인용 |
+
+### B. NAS에 접속
+
+```bash
+ssh gp@192.168.0.114
+```
+
+접속할 때마다 먼저 실행한다(docker 경로와 설정 폴더):
+
+```bash
+CS=$(getcfg container-station Install_Path -f /etc/config/qpkg.conf)
+export PATH=$PATH:$CS/bin:$CS/usr/bin DOCKER_CONFIG=/share/barochannel/.docker
+cd /share/barochannel
+```
+
+### C. 받은 파일 확인
+
+```bash
+(cd .ship && sha256sum -c SHA256SUMS)          # 모두 OK
+```
+
+### D. 이전 시도 정리
+
+이전에 받은 이미지는 망가졌을 수 있으므로 지운다. 아직 데이터가 없을 때만 DB 볼륨도 지운다(초기화 도중 죽은 볼륨).
+
+```bash
+docker compose --profile app down
+docker rmi postgres:17 postgres:17-bookworm barochannel-app:latest 2>/dev/null
+docker rmi "$(awk '$1=="minio"{print $2}' .ship/images.txt)" 2>/dev/null
+docker volume rm barochannel_postgres-data barochannel_minio-data 2>/dev/null   # 데이터가 없을 때만
+docker image prune -f
+```
+
+### E. PostgreSQL 이미지 받고 검증
+
+```bash
+P=$(awk '$1=="postgres"{print $2}' .ship/images.txt)
+docker pull "$P" && docker tag "$P" postgres:17-bookworm
+deploy/verify-image.sh check postgres:17-bookworm .ship/postgres.sha256
+```
+
+`정상 (파일 … 모두 원본과 같음)`이 나오면 다음으로. `손상 …개`가 나오면 지우고 다시 받는다.
+
+```bash
+docker rmi postgres:17-bookworm "$P"          # 그리고 E를 다시
+```
+
+### F. MinIO 이미지 받고 검증
+
+```bash
+M=$(awk '$1=="minio"{print $2}' .ship/images.txt)
+docker pull "$M"
+deploy/verify-image.sh check "$M" .ship/minio.sha256
+```
+
+손상이면 `docker rmi "$M"` 후 다시.
+
+### G. 앱 이미지 불러오고 검증
+
+```bash
+docker load -i .ship/app-image.tar.gz
+deploy/verify-image.sh check barochannel-app:latest .ship/app.sha256
+```
+
+`docker load`가 `invalid tar header`, `invalid diffID`로 실패하면 그대로 다시 실행한다. 손상이면 `docker rmi barochannel-app:latest` 후 다시.
+
+### H. 띄우기
+
+```bash
+docker compose --profile app up -d --no-build
+docker compose --profile app ps                # app·postgres가 (healthy)
+curl -s http://127.0.0.1:8000/healthz          # {"status":"ok"}
+```
+
+PC 브라우저에서 `http://192.168.0.114:8000`에 들어가 관리자 계정으로 로그인한다. 다 되면 `.ship/`의 파일은 지워도 된다(`rm .ship/*`).
+
+### 판단 기준
+
+- `check`가 실패하면 같은 이미지로 한 번 더 `check`한다. 검사도 docker를 거쳐 파일을 읽으므로, 두 번의 결과에서 **다른 파일**이 손상으로 나오면 읽는 과정에서 망가지는 것이다(이 경우도 NAS docker가 불안정하다는 뜻이다).
+- 몇 번을 다시 받아도 `정상`이 나오지 않으면 이 NAS의 Container Station으로는 운영할 수 없다. QTS·Container Station 업데이트와 QNAP 지원 문의, 가상머신(Virtualization Station) 안의 docker, 다른 PC에서 운영 중 하나를 고른다.
+- `정상`으로 띄운 뒤에도 앱이나 DB가 이유 없이 죽으면 같은 문제를 의심한다(실행 중 쓰는 파일은 일반 공유 폴더·볼륨에 저장되므로 검증 대상이 아니다).
+
 ---
 
 # 1차: 사내망에서 IP로 접속

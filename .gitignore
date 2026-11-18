@@ -27,3 +27,6 @@ docs/
 
 # deploy/backup.sh 결과
 backups/
+
+# deploy/nas.sh pack 결과(NAS로 보낼 이미지와 검증 목록)
+.ship/
