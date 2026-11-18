@@ -120,6 +120,9 @@ EOF
   echo "  ssh $NAS_HOST 'chmod 755 ~ && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys'"
 }
 
+# check 결과에 이미 배포한 기록이 있으면, 포트를 쓰는 것이 바로채널 자신일 수 있다.
+docker_running_here() { grep -q '^deployed='; }
+
 cmd_check() {
   say "NAS 점검 ($NAS_HOST)"
   local out compose
@@ -134,7 +137,10 @@ else
   echo "docker=없음"
 fi
 echo "mem_avail_mb=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)"
-if netstat -tln 2>/dev/null | grep -q '[:.]8000 '; then echo "port8000=사용중"; else echo "port8000=비어있음"; fi
+# 1차는 NAS 네트워크를 그대로 쓰므로(deploy/compose.lan.yml) 앱·DB·MinIO 포트가 비어 있어야 한다.
+for p in 8000 5432 9000 9001; do
+  if netstat -tln 2>/dev/null | grep -q "[:.]$p "; then echo "port$p=사용중"; else echo "port$p=비어있음"; fi
+done
 if [ ! -d "$DIR" ]; then echo "dir=없음"; elif [ -w "$DIR" ]; then echo "dir=있음"; else echo "dir=쓰기권한없음"; fi
 if [ -f "$DIR/.env" ]; then echo "env=있음"; else echo "env=없음"; fi
 if [ -f "$DIR/.deployed" ]; then echo "deployed=$(cat "$DIR/.deployed")"; fi
@@ -149,9 +155,15 @@ EOF
   if [[ "$(printf '%s\n%s\n' "$MIN_COMPOSE" "$compose" | sort -V | head -1)" != "$MIN_COMPOSE" ]]; then
     die "Docker Compose $MIN_COMPOSE 이상이 필요합니다(현재 $compose). Container Station을 업데이트하세요."
   fi
-  if grep -q '^port8000=사용중' <<<"$out" && ! grep -q '^deployed=' <<<"$out"; then
-    echo "주의: NAS에서 8000 포트를 다른 프로그램이 쓰고 있습니다. .env의 BARO_APP_PORT와 NAS_URL을 바꾸세요."
+  if ! docker_running_here <<<"$out"; then
+    grep -q '^port8000=사용중' <<<"$out" &&
+      echo "주의: NAS에서 8000 포트를 다른 프로그램이 씁니다. .env의 BARO_APP_PORT와 NAS_URL을 바꾸세요."
+    grep -q '^port5432=사용중' <<<"$out" &&
+      echo "주의: NAS에서 5432 포트를 다른 프로그램이 씁니다. .env의 BARO_DB_PORT를 바꾸세요."
+    grep -qE '^port900[01]=사용중' <<<"$out" &&
+      echo "주의: NAS에서 9000·9001 포트를 다른 프로그램이 씁니다. 바로채널 첨부 저장소(MinIO)가 뜨지 못합니다."
   fi
+  true
   echo "점검 끝."
 }
 

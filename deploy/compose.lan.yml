@@ -2,16 +2,38 @@
 # .env에 다음 줄을 넣으면 docker compose 명령마다 이 파일이 같이 적용된다.
 #   COMPOSE_FILE=docker-compose.yml:deploy/compose.lan.yml
 # 2차(도메인 + HTTPS)로 넘어갈 때 그 줄을 지우면 Caddy가 다시 같이 뜬다.
+#
+# 모든 컨테이너가 NAS의 네트워크를 그대로 쓴다(network_mode: host). QNAP Container Station은
+# compose가 새 네트워크를 만들 때 가상 스위치(qnetwork-tool vswitch create)의 NAT 규칙 추가에서
+# 실패하므로 네트워크를 만들지 않는다. 그래서 컨테이너끼리 서비스 이름 대신 127.0.0.1로 붙고,
+# PostgreSQL·MinIO는 NAS 안(127.0.0.1)에서만 받는다. 사내망에 열리는 것은 앱 포트뿐이다.
 services:
+  postgres:
+    network_mode: host
+    ports: !reset []
+    command: ["postgres", "-c", "listen_addresses=127.0.0.1", "-c", "port=${BARO_DB_PORT:-5432}"]
+
+  minio:
+    network_mode: host
+    ports: !reset []
+    command: ["server", "/data", "--address", "127.0.0.1:9000", "--console-address", "127.0.0.1:9001"]
+
   app:
-    ports:
-      # 접속 주소 http://<NAS IP>:<BARO_APP_PORT>
-      - "${BARO_APP_PORT:-8000}:8000"
+    network_mode: host
+    ports: !reset []
     environment:
+      # 접속 주소 http://<NAS IP>:<BARO_APP_PORT>
+      BARO_HOST: 0.0.0.0
+      BARO_PORT: ${BARO_APP_PORT:-8000}
+      BARO_DB_HOST: 127.0.0.1
+      BARO_DB_PORT: ${BARO_DB_PORT:-5432}
+      BARO_S3_ENDPOINT_URL: http://127.0.0.1:9000
       # HTTP로 접속하므로 세션 쿠키를 HTTPS 전용으로 두면 로그인이 유지되지 않는다.
       BARO_SECURE_COOKIES: "false"
       # 앞단 프록시 없이 바로 받으므로 접속자가 보낸 X-Forwarded-* 헤더는 믿지 않는다.
       FORWARDED_ALLOW_IPS: "127.0.0.1"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ['BARO_PORT'] + '/healthz', timeout=2)"]
 
   caddy:
     # HTTPS 프록시는 띄우지 않는다. --profile app에 들어가지 않도록 다른 프로필로 옮긴다.
