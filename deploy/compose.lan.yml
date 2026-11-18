@@ -9,6 +9,10 @@
 # PostgreSQL·MinIO는 NAS 안(127.0.0.1)에서만 받는다. 사내망에 열리는 것은 앱 포트뿐이다.
 services:
   postgres:
+    # Debian 13(trixie) 기반인 postgres:17은 QNAP NAS(QTS 5.2)에서 첫 DB를 만들다
+    # Segmentation fault로 죽는다. 같은 PostgreSQL 17의 Debian 12 기반 이미지를 쓴다.
+    # 2차로 넘어갈 때도 .env에 BARO_POSTGRES_IMAGE=postgres:17-bookworm을 넣어 그대로 유지한다.
+    image: ${BARO_POSTGRES_IMAGE:-postgres:17-bookworm}
     network_mode: host
     ports: !reset []
     command: ["postgres", "-c", "listen_addresses=127.0.0.1", "-c", "port=${BARO_DB_PORT:-5432}"]

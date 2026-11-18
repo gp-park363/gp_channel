@@ -361,6 +361,7 @@ vi .env
 | `BARO_DOMAIN` | 정한 도메인 |
 | `CLOUDFLARE_API_TOKEN` | 11.3에서 만든 토큰 |
 | `BARO_HTTP_PORT` / `BARO_HTTPS_PORT` | 10장에서 고른 포트. 주석을 지운다 |
+| `BARO_POSTGRES_IMAGE` | `postgres:17-bookworm`. **반드시 넣는다.** 1차 DB와 같은 이미지를 유지해야 한다(QNAP에서 기본 `postgres:17`은 죽고, 기반 Debian이 바뀌면 문자열 정렬도 달라진다) |
 
 다시 띄운다.
 
@@ -402,6 +403,7 @@ PC에서 확인:
 | `mkdir …/.qpkg/container-station/homes/<사용자>: permission denied` (빌드 중) | Container Station의 docker가 admin만 쓸 수 있는 곳에 사용자 설정을 만들려는 것이다. `deploy/nas.sh`는 알아서 피한다. NAS에서 직접 `docker compose`를 쓸 때는 먼저 `export DOCKER_CONFIG=/share/barochannel/.docker` |
 | 빌드 중 `failed to register layer: archive/tar: invalid tar header` | NAS가 받은 이미지 데이터가 깨진 것이다. `deploy/nas.sh ship`으로 이 PC에서 빌드한 앱 이미지를 보내 띄운다. NAS에서 고치려면 `docker builder prune -f` 뒤 다시 `up`, 그래도 같으면 Container Station의 레지스트리 미러 설정을 확인한다 |
 | `failed to create network …: execute qnetwork-tool [vswitch create …] failed` / `AddNATrule … failed` | QNAP이 compose용 새 네트워크(가상 스위치)를 만들지 못한 것이다. 1차 설정은 네트워크를 만들지 않고 NAS 네트워크를 그대로 쓴다(`deploy/compose.lan.yml`의 `network_mode: host`). `.env`의 `COMPOSE_FILE` 줄이 켜져 있는지 확인한다. 실패하며 남은 네트워크가 있으면 `docker network rm barochannel_default` |
+| postgres가 `exited (2)`, 로그에 `terminated by signal 11: Segmentation fault`, `Failed process was running: CREATE DATABASE` | Debian 13(trixie) 기반 `postgres:17`이 QNAP에서 죽는 것이다. 1차 설정은 `postgres:17-bookworm`을 쓴다. 이미 반쯤 만들어진 DB 볼륨은 지우고 다시 띄운다(데이터가 없을 때만): `docker compose --profile app down && docker volume rm barochannel_postgres-data`. 2차로 넘어갈 때는 `.env`에 `BARO_POSTGRES_IMAGE=postgres:17-bookworm`을 넣는다 |
 | `!override` 관련 오류 | Docker Compose 2.24 이상이 필요하다(NAS는 2.29.1). Container Station을 업데이트한다 |
 | 2차: Caddy가 Restarting 반복 | `docker compose logs caddy`. 토큰이 비었거나 틀리면 `provision tls.issuance.acme` 오류가 난다 |
 | 2차: `timed out waiting for record to fully propagate` | NAS에서 1.1.1.1:53으로 나가는 연결이 막혔는지 본다 |

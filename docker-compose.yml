@@ -7,7 +7,9 @@
 # PostgreSQL 호스트 포트는 5432다(127.0.0.1에만 연다).
 services:
   postgres:
-    image: postgres:17
+    # BARO_POSTGRES_IMAGE로 바꿀 수 있다. QNAP NAS는 postgres:17-bookworm을 쓴다(deploy/compose.lan.yml).
+    # 이미 데이터가 있는 DB의 기반 Debian 버전을 바꾸면 문자열 정렬(glibc)이 달라져 인덱스가 어긋날 수 있다.
+    image: ${BARO_POSTGRES_IMAGE:-postgres:17}
     environment:
       POSTGRES_USER: ${BARO_DB_USER:-barochannel}
       POSTGRES_PASSWORD: ${BARO_DB_PASSWORD:-barochannel}
