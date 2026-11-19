@@ -1,5 +1,7 @@
 # QNAP NAS 배포 매뉴얼
 
+> **보류(2026-11-18):** 이 NAS의 Container Station이 이미지를 풀어 저장할 때 파일을 망가뜨려(아래 "NAS 안에서 단계별로 진행") 배포를 멈췄다. 운영은 iwinv 클라우드로 한다([deploy_iwinv.md](deploy_iwinv.md)). NAS는 백업 보관에 쓴다.
+
 바로채널을 사내 QNAP NAS(gpnas, 192.168.0.114)의 Container Station에 올리는 절차다. 두 단계로 나눈다.
 
 | 단계 | 접속 주소 | 쓰는 것 | 언제 |

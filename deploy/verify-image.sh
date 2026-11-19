@@ -27,7 +27,9 @@ cleanup() {
 trap cleanup EXIT
 
 [[ "$mode" == check && ! -f "$list" ]] && { echo "목록 파일이 없습니다: $list" >&2; exit 2; }
-cid="$(docker create "$image")"
+# 이미지가 없으면 받지 않고 멈춘다(검사가 몰래 받아 버리면 무엇을 검사했는지 알 수 없다).
+docker image inspect "$image" >/dev/null 2>&1 || { echo "이미지가 없습니다: $image (먼저 받거나 불러오세요)" >&2; exit 2; }
+cid="$(docker create --pull never "$image")"
 mkdir -p "$work"
 # /dev의 장치 파일은 일반 사용자가 만들 수 없어 건너뛴다.
 docker export "$cid" | tar -x -C "$work" --exclude='dev/*' --exclude='./dev/*' 2>/dev/null || true

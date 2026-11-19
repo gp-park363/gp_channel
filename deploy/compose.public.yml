@@ -1,0 +1,18 @@
+# 인터넷에 열린 클라우드 서버(iwinv 등) 설정. deploy_iwinv.md를 본다.
+# 서버의 .env에 다음 줄을 넣으면 docker compose 명령마다 이 파일이 같이 적용된다.
+#   COMPOSE_FILE=docker-compose.yml:deploy/compose.public.yml
+#
+# HTTPS 인증서는 Cloudflare DNS 대신 Let's Encrypt HTTP 확인으로 받는다(80·443이 열려 있으므로).
+# 그래서 Cloudflare 플러그인을 넣은 Caddy를 빌드하지 않고 공식 이미지를 그대로 쓴다.
+#   도메인으로 접속:   BARO_DOMAIN=<도메인>                       → deploy/Caddyfile.public
+#   IP로 접속:         BARO_DOMAIN=<서버 IP>, BARO_CADDYFILE=Caddyfile.ip → deploy/Caddyfile.ip
+services:
+  caddy:
+    # IP 주소 인증서(Let's Encrypt shortlived)는 Caddy 2.11부터 된다.
+    image: caddy:2.11-alpine
+    build: !reset null
+    volumes: !override
+      - ./deploy/${BARO_CADDYFILE:-Caddyfile.public}:/etc/caddy/Caddyfile:ro
+      # 발급받은 인증서. 지우면 다시 발급한다(Let's Encrypt는 발급 횟수 제한이 있다).
+      - caddy-data:/data
+      - caddy-config:/config

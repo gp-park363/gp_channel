@@ -1,0 +1,21 @@
+# 인터넷에 열린 서버(iwinv 등 클라우드)용. deploy/compose.public.yml이 이 파일을 쓴다.
+# BARO_DOMAIN이 이 서버의 공인 IP를 가리키고 80·443이 열려 있으면, Caddy가 Let's Encrypt
+# 인증서를 HTTP 확인 방식으로 받고 알아서 갱신한다(Cloudflare 토큰이나 플러그인이 필요 없다).
+# http:// 로 들어오면 https:// 로 넘긴다.
+
+{$BARO_DOMAIN} {
+	# 업로드 한도(BARO_MAX_UPLOAD_MB × 파일 수)보다 넉넉하게 둔다.
+	request_body {
+		max_size 300MB
+	}
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		# 1년 동안 이 도메인은 HTTPS로만 접속하게 한다.
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	# Caddy가 X-Forwarded-Proto를 넘기므로 앱은 https 주소로 리다이렉트와 링크를 만든다.
+	# 실시간 알림(SSE)은 Caddy가 자동으로 바로바로 흘려보낸다.
+	reverse_proxy app:8000
+}

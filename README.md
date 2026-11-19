@@ -39,7 +39,7 @@ docker compose --profile app up -d --build
 - 80·443을 다른 서비스가 쓰는 서버(예: QNAP NAS)에서는 `.env`에 `BARO_HTTP_PORT`, `BARO_HTTPS_PORT`를 정한다. 접속 주소는 `https://<도메인>:<HTTPS 포트>`가 된다.
 - 개발용 `docker compose up -d`는 지금처럼 PostgreSQL과 MinIO만 띄운다. 운영 모드 세션 쿠키는 HTTPS에서만 오가므로 `http://localhost:8000` 개발 서버와는 따로 쓴다.
 
-사내 QNAP NAS에 올리는 절차는 [deploy_qnap.md](deploy_qnap.md)에 있다. 1차는 Caddy 없이 사내망에서 `http://<NAS IP>:8000`으로 열고([deploy/compose.lan.yml](deploy/compose.lan.yml)), 2차에서 도메인과 Cloudflare 인증서를 붙인다. 1차는 `deploy/nas.sh`(`check` → `push` → `env` → `up`)로 이 PC에서 진행한다.
+운영 서버(iwinv 클라우드)에 올리는 절차는 [deploy_iwinv.md](deploy_iwinv.md)에 있다(`deploy/server.sh`). 사내 QNAP NAS에 올리는 절차는 [deploy_qnap.md](deploy_qnap.md)에 있다. (NAS 배포는 Container Station 문제로 보류) 1차는 Caddy 없이 사내망에서 `http://<NAS IP>:8000`으로 열고([deploy/compose.lan.yml](deploy/compose.lan.yml)), 2차에서 도메인과 Cloudflare 인증서를 붙인다. 1차는 `deploy/nas.sh`(`check` → `push` → `env` → `up`)로 이 PC에서 진행한다.
 
 ### 저장소 비밀번호
 
