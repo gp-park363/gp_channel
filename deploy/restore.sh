@@ -22,10 +22,11 @@ docker compose up -d --wait postgres minio >/dev/null 2>&1
 
 echo "DB 복원 중..."
 # 계정과 DB 이름은 컨테이너 환경 변수(.env의 BARO_DB_*)를 따른다.
+# dropdb·createdb는 관리용 DB(postgres)에 접속해 대상 DB를 지우고 만든다.
 # createdb는 접속한 계정을 소유자로 만들고, 다른 계정으로 만든 백업도 --no-owner로 받아들인다.
 docker compose exec -T postgres sh -c '
-  dropdb -U "$POSTGRES_USER" -d postgres --if-exists --force "$POSTGRES_DB" &&
-  createdb -U "$POSTGRES_USER" -d postgres "$POSTGRES_DB"'
+  dropdb -U "$POSTGRES_USER" --if-exists --force "$POSTGRES_DB" &&
+  createdb -U "$POSTGRES_USER" "$POSTGRES_DB"'
 docker compose exec -T postgres sh -c \
   'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --no-owner --exit-on-error' \
   < "$dir/barochannel.dump"
