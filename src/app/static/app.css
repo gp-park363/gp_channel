@@ -196,7 +196,17 @@ td select { min-height: 40px; padding: 6px 10px; }
 .file-button:hover { background: var(--fill); }
 .file-button:focus-within { outline: 2px solid var(--accent); }
 .file-button input { height: 1px; opacity: 0; position: absolute; width: 1px; }
-.file-names { color: var(--text-3); flex: 1; font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-names { color: var(--text-3); display: flex; flex: 1; flex-wrap: wrap; font-size: 13px; gap: 4px; min-width: 0; }
+.file-names:empty { display: none; }
+.file-buttons { align-self: flex-start; display: inline-flex; flex-wrap: wrap; gap: 4px; }
+/* 사진 찍기는 카메라가 있는 터치 기기에서만 보인다. PC에서는 파일 첨부와 같은 창이 열린다. */
+@media (hover: hover) and (pointer: fine) { .camera-button { display: none !important; } }
+.file-chip { align-items: center; background: var(--fill); border-radius: 8px; display: inline-flex; gap: 4px; max-width: 240px; min-height: 32px; padding: 2px 2px 2px 8px; }
+.file-chip img { border-radius: 4px; flex: none; height: 28px; margin-left: -6px; object-fit: cover; width: 28px; }
+.file-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-chip .file-remove { background: none; color: var(--text-3); flex: none; font-size: 16px; min-height: 28px; min-width: 28px; padding: 0; }
+.file-chip .file-remove:hover { background: var(--fill-strong); }
+form.dragging-files { outline: 2px dashed var(--accent); outline-offset: 2px; }
 .composer-actions button { font-size: 15px; min-height: 40px; }
 .preview { background: var(--fill); border-radius: var(--radius-sm); margin-top: 6px; max-height: 180px; overflow-y: auto; padding: 8px 12px; }
 form.card textarea { min-height: 96px; }

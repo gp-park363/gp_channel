@@ -231,10 +231,169 @@
     }
   });
 
+  // 첨부: 파일 고르기, 끌어 놓기, 캡처 붙여넣기, 사진 찍기를 모두 name=files 입력 하나에 모은다.
+  // 파일 고르기 창은 고를 때마다 목록을 바꿔 버리므로, 모은 파일은 held에 두고 입력에 다시 싣는다.
+  const FILE_INPUT = '.file-button input[name="files"]';
+  const held = new WeakMap();
+
+  function fileInputOf(form) {
+    return form ? form.querySelector(FILE_INPUT) : null;
+  }
+
+  // 끌어 놓거나 붙여 넣은 곳의 첨부 입력. 쓰레드 안이면 답글 입력, 아니면 그 화면의 입력이다.
+  function targetInput(node) {
+    const element = node instanceof Element ? node : node && node.parentElement;
+    if (!element) return null;
+    const own = fileInputOf(element.closest("form"));
+    if (own) return own;
+    const pane = element.closest(".thread-pane, .timeline-pane, main");
+    return (pane || document).querySelector(FILE_INPUT);
+  }
+
+  function extensionOf(name) {
+    const dot = name.lastIndexOf(".");
+    return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
+  }
+
+  // 캡처·카메라 사진은 이름이 image.png처럼 같아서, 찍은 시각으로 이름을 붙인다.
+  function stampedFile(file, prefix, taken) {
+    const pad = (n) => String(n).padStart(2, "0");
+    const d = new Date();
+    const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+    const ext = { "image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp" }[file.type]
+      || extensionOf(file.name) || "png";
+    let name = `${prefix}-${stamp}.${ext}`;
+    for (let n = 2; taken.has(name); n += 1) name = `${prefix}-${stamp}-${n}.${ext}`;
+    return new File([file], name, { type: file.type, lastModified: file.lastModified });
+  }
+
+  function syncFiles(input, files) {
+    held.set(input, files);
+    const transfer = new DataTransfer();
+    files.forEach((file) => transfer.items.add(file));
+    input.files = transfer.files;
+    renderFiles(input);
+  }
+
+  function addFiles(input, incoming, prefix) {
+    const maxFiles = Number(input.dataset.maxFiles) || 10;
+    const maxMb = Number(input.dataset.maxMb) || 20;
+    const allowed = new Set((input.dataset.extensions || "").split(",").filter(Boolean));
+    const files = (held.get(input) || []).slice();
+    const problems = [];
+    for (let file of incoming) {
+      if (prefix) file = stampedFile(file, prefix, new Set(files.map((f) => f.name)));
+      if (allowed.size && !allowed.has(extensionOf(file.name))) {
+        problems.push(`올릴 수 없는 형식입니다: ${file.name}`);
+      } else if (file.size > maxMb * 1024 * 1024) {
+        problems.push(`파일은 ${maxMb}MB까지 가능합니다: ${file.name}`);
+      } else if (files.length >= maxFiles) {
+        problems.push(`첨부는 ${maxFiles}개까지 가능합니다.`);
+        break;
+      } else {
+        files.push(file);
+      }
+    }
+    syncFiles(input, files);
+    if (problems.length) showToast(problems.join(" "));
+  }
+
+  function renderFiles(input) {
+    const names = input.closest("form").querySelector(".file-names");
+    if (!names) return;
+    names.querySelectorAll("img").forEach((img) => URL.revokeObjectURL(img.src));
+    names.replaceChildren(...(held.get(input) || []).map((file, index) => {
+      const chip = document.createElement("span");
+      chip.className = "file-chip";
+      if (file.type.startsWith("image/")) {
+        const img = document.createElement("img");
+        img.alt = "";
+        img.src = URL.createObjectURL(file);
+        chip.append(img);
+      }
+      const label = document.createElement("span");
+      label.className = "file-chip-name";
+      label.textContent = file.name;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "file-remove";
+      remove.dataset.index = String(index);
+      remove.setAttribute("aria-label", `${file.name} 빼기`);
+      remove.textContent = "×";
+      chip.append(label, remove);
+      return chip;
+    }));
+  }
+
   document.body.addEventListener("change", (event) => {
-    if (!event.target.matches('.file-button input')) return;
-    const names = event.target.closest("form").querySelector(".file-names");
-    names.textContent = Array.from(event.target.files, (file) => file.name).join(", ");
+    const input = event.target;
+    if (input.matches(FILE_INPUT)) {
+      const picked = Array.from(input.files);
+      syncFiles(input, held.get(input) || []);
+      addFiles(input, picked);
+    } else if (input.matches(".file-button input[data-camera]")) {
+      const main = fileInputOf(input.form);
+      if (main && input.files.length) addFiles(main, Array.from(input.files), "사진");
+      input.value = "";
+    }
+  });
+
+  document.body.addEventListener("click", (event) => {
+    const remove = event.target.closest(".file-remove");
+    if (!remove) return;
+    const input = fileInputOf(remove.closest("form"));
+    const files = (held.get(input) || []).slice();
+    files.splice(Number(remove.dataset.index), 1);
+    syncFiles(input, files);
+  });
+
+  // 보낸 뒤 form.reset()이 입력을 비우면 모아 둔 목록도 비운다.
+  document.body.addEventListener("reset", (event) => {
+    const input = fileInputOf(event.target);
+    if (input) setTimeout(() => syncFiles(input, []));
+  });
+
+  // 끌어 놓기. 파일을 끌 때만 반응하고, 놓을 곳이 없으면 브라우저가 파일을 열어 화면을 떠나지 않게 막는다.
+  let dragTimer;
+  function hasFiles(event) {
+    return event.dataTransfer && Array.from(event.dataTransfer.types).includes("Files");
+  }
+  function clearDragging() {
+    document.querySelectorAll(".dragging-files").forEach((form) => form.classList.remove("dragging-files"));
+  }
+
+  document.addEventListener("dragover", (event) => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    const input = targetInput(event.target);
+    event.dataTransfer.dropEffect = input ? "copy" : "none";
+    clearDragging();
+    if (input) input.form.classList.add("dragging-files");
+    clearTimeout(dragTimer);
+    dragTimer = setTimeout(clearDragging, 150);
+  });
+
+  document.addEventListener("drop", (event) => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    clearDragging();
+    const input = targetInput(event.target);
+    if (input && event.dataTransfer.files.length) addFiles(input, Array.from(event.dataTransfer.files));
+  });
+
+  // 캡처 붙여넣기. 엑셀·워드에서 복사하면 글과 그림이 함께 오므로, 글이 있으면 글로 붙인다.
+  document.addEventListener("paste", (event) => {
+    const data = event.clipboardData;
+    if (!data || !data.files.length || data.getData("text/plain")) return;
+    const input = targetInput(event.target);
+    // 검색창처럼 첨부가 없는 입력칸에 붙인 그림은 다른 곳의 첨부로 보내지 않는다.
+    const editable = event.target.closest && event.target.closest("input, textarea, [contenteditable]");
+    if (!input || (editable && editable.form !== input.form && !input.form.contains(editable))) return;
+    event.preventDefault();
+    const files = Array.from(data.files);
+    const generic = (file) => !file.name || /^image\.\w+$/i.test(file.name);
+    addFiles(input, files.filter((file) => !generic(file)));
+    addFiles(input, files.filter(generic), "캡처");
   });
 
   function csrfHeaders() {

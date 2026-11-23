@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     db_password: str = "barochannel"
     db_name: str = "barochannel"
     db_host: str = "localhost"
-    db_port: int = 5432
+    db_port: int = 5434
     db_null_pool: bool = False
     host: str = "127.0.0.1"
     port: int = 8000

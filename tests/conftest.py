@@ -4,7 +4,7 @@ import re
 from collections.abc import Awaitable, Iterator
 
 os.environ.update(
-    BARO_DATABASE_URL="postgresql+asyncpg://barochannel:barochannel@localhost:5432/barochannel_test",
+    BARO_DATABASE_URL="postgresql+asyncpg://barochannel:barochannel@localhost:5434/barochannel_test",
     BARO_DB_NULL_POOL="true",
     BARO_DEBUG="true",
     BARO_S3_BUCKET="barochannel-test",
@@ -48,7 +48,7 @@ def run[T](awaitable: Awaitable[T]) -> T:
 
 async def _recreate_database() -> None:
     connection = await asyncpg.connect(
-        "postgresql://barochannel:barochannel@localhost:5432/postgres"
+        "postgresql://barochannel:barochannel@localhost:5434/postgres"
     )
     await connection.execute("DROP DATABASE IF EXISTS barochannel_test WITH (FORCE)")
     await connection.execute("CREATE DATABASE barochannel_test")

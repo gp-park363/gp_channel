@@ -15,7 +15,10 @@ services:
     image: ${BARO_POSTGRES_IMAGE:-postgres:17-bookworm}
     network_mode: host
     ports: !reset []
-    command: ["postgres", "-c", "listen_addresses=127.0.0.1", "-c", "port=${BARO_DB_PORT:-5432}"]
+    command: ["postgres", "-c", "listen_addresses=127.0.0.1", "-c", "port=${BARO_DB_PORT:-5434}"]
+    environment:
+      # 컨테이너 안의 pg_isready·pg_dump·psql(healthcheck, deploy/backup.sh, restore.sh)도 같은 포트로 붙게 한다.
+      PGPORT: ${BARO_DB_PORT:-5434}
 
   minio:
     network_mode: host
@@ -30,7 +33,7 @@ services:
       BARO_HOST: 0.0.0.0
       BARO_PORT: ${BARO_APP_PORT:-8000}
       BARO_DB_HOST: 127.0.0.1
-      BARO_DB_PORT: ${BARO_DB_PORT:-5432}
+      BARO_DB_PORT: ${BARO_DB_PORT:-5434}
       BARO_S3_ENDPOINT_URL: http://127.0.0.1:9000
       # HTTP로 접속하므로 세션 쿠키를 HTTPS 전용으로 두면 로그인이 유지되지 않는다.
       BARO_SECURE_COOKIES: "false"

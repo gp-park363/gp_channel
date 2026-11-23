@@ -21,8 +21,7 @@
       <option value="after_close">마감 후 공개</option>
     </select>
   </label>
-  <label class="file-button">파일 첨부<input type="file" name="files" multiple></label>
-  <span class="file-names"></span>
+  {% include "partials/file_picker.html" %}
   <button class="primary">올리기</button>
 </form>
 {% endblock %}

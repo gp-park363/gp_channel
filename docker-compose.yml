@@ -4,7 +4,7 @@
 # `docker compose up -d`는 저장소만 띄운다(앱은 uv run으로 직접 실행).
 # `docker compose --profile app up -d --build`는 앱과 HTTPS 프록시(Caddy)까지 띄운다.
 # 사내망에서 IP·HTTP로만 쓸 때(Caddy 없이)는 deploy/compose.lan.yml을 함께 쓴다.
-# PostgreSQL 호스트 포트는 5432다(127.0.0.1에만 연다).
+# PostgreSQL 호스트 포트는 5434다(127.0.0.1에만 연다). BARO_DB_PORT로 바꾼다. 컨테이너끼리는 postgres:5432로 붙는다.
 services:
   postgres:
     # BARO_POSTGRES_IMAGE로 바꿀 수 있다. QNAP NAS는 postgres:17-bookworm을 쓴다(deploy/compose.lan.yml).
@@ -15,7 +15,7 @@ services:
       POSTGRES_PASSWORD: ${BARO_DB_PASSWORD:-barochannel}
       POSTGRES_DB: ${BARO_DB_NAME:-barochannel}
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${BARO_DB_PORT:-5434}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -97,7 +97,8 @@ services:
       - "${BARO_HTTPS_PORT:-443}:${BARO_HTTPS_PORT:-443}"
       - "${BARO_HTTPS_PORT:-443}:${BARO_HTTPS_PORT:-443}/udp"
     volumes:
-      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # 도메인 없이 VPN IP·localhost로만 쓸 때는 .env에 BARO_CADDYFILE=Caddyfile.local(Cloudflare 토큰 불필요).
+      - ./deploy/${BARO_CADDYFILE:-Caddyfile}:/etc/caddy/Caddyfile:ro
       # 발급받은 인증서와 자체 CA 키. 지우면 다시 발급한다.
       - caddy-data:/data
       - caddy-config:/config

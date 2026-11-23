@@ -10,7 +10,7 @@ QNAP NAS 배포는 보류했다. Container Station이 이미지를 풀 때 파�
  사용자 브라우저 ── https://gw.goodpackage.co.kr ──▶ iwinv 서버 (Ubuntu 24.04)
                                                     ├─ caddy     80·443 (HTTPS, 인증서 자동 발급·갱신)
                                                     ├─ app       8000 (컨테이너끼리만)
-                                                    ├─ postgres  127.0.0.1:5432 (서버 안에서만)
+                                                    ├─ postgres  127.0.0.1:5434 (서버 안에서만)
                                                     └─ minio     127.0.0.1:9000·9001 (서버 안에서만)
  이 PC ── SSH(deploy 계정, 키) ──▶ 배포·백업 ── 백업 파일 ──▶ 이 PC, NAS
 ```

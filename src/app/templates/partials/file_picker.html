@@ -1,0 +1,8 @@
+{# 첨부 고르기. 끌어 놓기, 캡처 붙여넣기, 사진 찍기도 모두 name=files 입력 하나에 모인다(app.js).
+   서버가 다시 검사하므로 data-* 한도는 미리 알려 주는 용도다. #}
+<span class="file-buttons">
+  <label class="file-button">파일 첨부<input type="file" name="files" multiple
+    data-max-files="{{ UPLOAD.max_files }}" data-max-mb="{{ UPLOAD.max_mb }}" data-extensions="{{ UPLOAD.extensions }}"></label>
+  <label class="file-button camera-button">사진 찍기<input type="file" accept="image/*" capture="environment" data-camera></label>
+</span>
+<span class="file-names" aria-live="polite"></span>

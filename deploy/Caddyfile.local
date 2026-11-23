@@ -1,0 +1,34 @@
+# 도메인 없이 VPN(Tailscale) IP와 localhost로만 접속할 때. Cloudflare 토큰이 필요 없다.
+# .env에 BARO_CADDYFILE=Caddyfile.local을 넣으면 docker-compose.yml이 deploy/Caddyfile 대신 이 파일을 쓴다.
+# 인증서는 Caddy 자체 CA로 발급하므로 접속하는 기기마다 caddy-root.crt를 등록해야 경고가 사라진다(README).
+# 도메인(BARO_DOMAIN)으로도 접속하려면 CLOUDFLARE_API_TOKEN을 넣고 BARO_CADDYFILE 줄을 지운다.
+{
+	# IP로 접속하면 브라우저가 서버 이름(SNI)을 보내지 않는다. 그때 쓸 인증서 이름이다.
+	default_sni {$BARO_DEFAULT_SNI}
+	# HTTPS 포트를 https_port로 정하지 않는 까닭은 deploy/Caddyfile을 본다.
+	http_port {$BARO_HTTP_PORT:80}
+}
+
+(app) {
+	# 업로드 한도(BARO_MAX_UPLOAD_MB × 파일 수)보다 넉넉하게 둔다.
+	request_body {
+		max_size 300MB
+	}
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+	reverse_proxy app:8000
+}
+
+# 예: https://100.x.y.z:8888. BARO_VPN_IP가 없으면 127.0.0.1이 된다.
+{$BARO_VPN_IP:127.0.0.1}:{$BARO_HTTPS_PORT:443} {
+	tls internal
+	import app
+}
+
+localhost:{$BARO_HTTPS_PORT:443} {
+	tls internal
+	import app
+}

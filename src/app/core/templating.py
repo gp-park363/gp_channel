@@ -39,6 +39,12 @@ templates.env.globals["csrf_token"] = csrf_token
 templates.env.globals["asset"] = asset
 templates.env.globals["is_system_admin"] = is_system_admin
 templates.env.globals["company_name"] = get_settings().company_name
+# 첨부 한도. 화면이 미리 걸러 주는 용도이고, 서버가 다시 검사한다.
+templates.env.globals["UPLOAD"] = {
+    "max_files": get_settings().max_files_per_post,
+    "max_mb": get_settings().max_upload_mb,
+    "extensions": ",".join(sorted(get_settings().allowed_extensions)),
+}
 
 
 def render_text(name: str, **context: object) -> str:
