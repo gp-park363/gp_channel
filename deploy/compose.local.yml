@@ -1,0 +1,18 @@
+# 이 PC에서 컨테이너로 시험할 때: HTTP만 쓴다(도메인·인증서·Caddy 없음).
+# .env에 다음 줄을 넣으면 docker compose 명령마다 이 파일이 같이 적용된다.
+#   COMPOSE_FILE=docker-compose.yml:deploy/compose.local.yml
+# 접속 주소는 http://localhost:<BARO_APP_PORT>(기본 8000). 운영 서버에서는 쓰지 않는다.
+services:
+  app:
+    # 암호화하지 않으므로 이 PC에서만 들어오게 127.0.0.1에만 연다.
+    ports:
+      - "127.0.0.1:${BARO_APP_PORT:-8000}:8000"
+    environment:
+      # HTTP로 접속하므로 세션 쿠키를 HTTPS 전용으로 두면 로그인이 유지되지 않는다.
+      BARO_SECURE_COOKIES: "false"
+      # 앞단 프록시 없이 바로 받으므로 접속자가 보낸 X-Forwarded-* 헤더는 믿지 않는다.
+      FORWARDED_ALLOW_IPS: "127.0.0.1"
+
+  caddy:
+    # HTTPS 프록시는 띄우지 않는다. --profile app에 들어가지 않도록 다른 프로필로 옮긴다.
+    profiles: !override [https-disabled]

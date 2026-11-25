@@ -24,7 +24,25 @@ uv run barochannel
 
 서버는 <http://localhost:8000>에서 열린다. `/healthz`는 데이터베이스 연결 상태를 알려준다.
 
-## Docker로 실행 (HTTPS)
+### 로컬 시험은 HTTP로
+
+이 PC에서의 시험은 HTTP만 쓴다. 인증서와 Caddy는 운영 서버에서만 쓴다. `.env`에 다음 두 줄을 둔다.
+
+```bash
+BARO_SECURE_COOKIES=false   # 운영 모드(BARO_DEBUG=false)여도 HTTP에서 로그인이 유지된다
+COMPOSE_FILE=docker-compose.yml:deploy/compose.local.yml
+```
+
+| 방법 | 명령 | 주소 |
+| --- | --- | --- |
+| 소스로 실행 | `docker compose up -d` 후 `uv run barochannel` | <http://localhost:8000> |
+| 컨테이너로 실행 | `docker compose --profile app up -d --build` | <http://localhost:8000> (`BARO_APP_PORT`로 바꾼다) |
+
+두 방법은 같은 포트를 쓰므로 하나만 띄운다. 컨테이너는 127.0.0.1에만 열려 이 PC에서만 들어올 수 있다([deploy/compose.local.yml](deploy/compose.local.yml)). 두 줄은 운영 서버의 `.env`에 넣지 않는다.
+
+## Docker로 실행 (HTTPS, 운영)
+
+로컬 시험에는 쓰지 않는다. `.env`에 `deploy/compose.local.yml`을 적은 `COMPOSE_FILE` 줄이 있으면 Caddy가 뜨지 않는다.
 
 앱과 HTTPS 프록시(Caddy)까지 컨테이너로 띄운다. 앱은 운영 모드(`BARO_DEBUG=false`)로 돌고, 시작할 때 마이그레이션을 맞춘다. 앱 포트는 밖에 열지 않고 Caddy만 80·443을 연다.
 
@@ -36,9 +54,8 @@ docker compose --profile app up -d --build
 - 인증서는 Cloudflare DNS 인증(DNS-01)으로 Let's Encrypt에서 받고 자동 갱신한다. 서버를 외부에 열 필요가 없고, PC마다 루트 인증서를 등록할 필요도 없다.
 - `CLOUDFLARE_API_TOKEN`은 Cloudflare → My Profile → API Tokens에서 `Edit zone DNS` 템플릿으로 만들고, 영역을 해당 도메인으로 제한한다. 토큰이 없거나 틀리면 Caddy가 시작하지 않는다(`docker compose logs caddy`).
 - `BARO_DOMAIN`이 서버 IP를 가리키게 한다. Cloudflare에 A 레코드(프록시 끔, DNS only)를 사내 IP로 만들거나, 각 PC의 hosts 파일에 적는다.
-- 이 PC에서는 https://localhost 로도 들어올 수 있다(Caddy 자체 CA라 경고가 뜬다).
 - 80·443을 다른 서비스가 쓰는 서버(예: QNAP NAS)에서는 `.env`에 `BARO_HTTP_PORT`, `BARO_HTTPS_PORT`를 정한다. 접속 주소는 `https://<도메인>:<HTTPS 포트>`가 된다.
-- 개발용 `docker compose up -d`는 지금처럼 PostgreSQL과 MinIO만 띄운다. 운영 모드 세션 쿠키는 HTTPS에서만 오가므로 `http://localhost:8000` 개발 서버와는 따로 쓴다.
+- `docker compose up -d`는 PostgreSQL과 MinIO만 띄운다.
 
 운영 서버(iwinv 클라우드)에 올리는 절차는 [deploy_iwinv.md](deploy_iwinv.md)에 있다(`deploy/server.sh`). 사내 QNAP NAS에 올리는 절차는 [deploy_qnap.md](deploy_qnap.md)에 있다. (NAS 배포는 Container Station 문제로 보류) 1차는 Caddy 없이 사내망에서 `http://<NAS IP>:8000`으로 열고([deploy/compose.lan.yml](deploy/compose.lan.yml)), 2차에서 도메인과 Cloudflare 인증서를 붙인다. 1차는 `deploy/nas.sh`(`check` → `push` → `env` → `up`)로 이 PC에서 진행한다.
 
@@ -67,7 +84,7 @@ deploy/restore.sh backups/20261117-0954  # 현재 데이터를 지우고 복원 
 
 ### VPN 외부 접속 (Tailscale, IP로)
 
-사무실 밖에서 이 PC의 바로채널에 들어올 때 쓴다. 공유기 포트포워딩·공인 IP·도메인이 필요 없고 무료다.
+사무실 밖에서 이 PC의 바로채널에 들어올 때 쓴다. HTTPS(Caddy)로 동작하므로 로컬 HTTP 설정에서는 쓸 수 없다. 쓰려면 `.env`의 `COMPOSE_FILE` 줄을 지운다. 공유기 포트포워딩·공인 IP·도메인이 필요 없고 무료다.
 
 1. **서버 PC(Windows)**: Tailscale 설치(`winget install Tailscale.Tailscale`) 후 로그인한다.
    Windows에서 로그아웃해도 연결이 유지되도록 관리자 PowerShell에서 `tailscale up --unattended`를 한 번 실행한다.
