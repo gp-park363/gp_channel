@@ -805,14 +805,13 @@ def test_return_to_register_reruns_every_step(place: Place) -> None:
     assert item_of(post).status == "done"
 
 
-def test_return_to_process_step_keeps_registration(place: Place) -> None:
+def test_review_return_to_process_step_can_edit(place: Place) -> None:
+    """검토 단계가 돌려보내면 이전 값을 고칠 수 있다."""
     post = submitted(place)
     process(place, post, files=[("v_f4", ("초안.txt", b"1"))])
-    review(place, post)
-    # 확정 단계는 고를 수 없고, 없는 단계도 안 된다.
-    assert act(place.final, post, "return", target=3, reason="x").status_code == 400
-    response = act(place.final, post, "return", target=1, reason="결과를 다시")
-    assert response.status_code == 200
+    # 없는 단계는 고를 수 없다.
+    assert act(place.reviewer, post, "return", target=3, reason="x").status_code == 400
+    assert act(place.reviewer, post, "return", target=1, reason="결과를 다시").status_code == 200
     item = item_of(post)
     assert (item.status, item.round, item.current_step) == ("in_progress", 2, 1)
     assert count(place.worker) == 1 and count(place.writer) == 0
@@ -822,8 +821,187 @@ def test_return_to_process_step_keeps_registration(place: Place) -> None:
     process(place, post, "고침", k_f4=file.id)
     newest = [row for row in tasks_of(post) if row.step_no == 1 and row.status == "done"][-1]
     assert newest.values == {"f3": "고침", "f4": [file.id]}
-    # 예전 검토는 유효하지 않다. 다시 검토해야 한다.
     assert item_of(post).current_step == 2 and count(place.reviewer) == 1
+
+
+def test_step_template_fills_first_input_only(place: Place) -> None:
+    steps = copy.deepcopy(definition(place).steps)
+    steps[1]["fields"][0]["template"] = "- 작업자:"
+    assert save(place, steps).status_code == 200
+    post = submitted(place)
+    assert "- 작업자:</textarea>" in browser(place.worker).get(f"/flows/{post}").text
+    process(place, post)
+    review(place, post)
+    act(place.final, post, "return", target=1, reason="더")
+    assert "- 작업자:</textarea>" not in browser(place.worker).get(f"/flows/{post}").text
+
+
+def confirm_return(place: Place, target: int, **data) -> int:
+    post = submitted(place, **data)
+    process(place, post, "처음 작업")
+    review(place, post, "처음 검토")
+    response = act(place.final, post, "return", target=target, reason="더 필요합니다")
+    assert response.status_code == 200, response.text
+    return post
+
+
+def resubmit(place: Place, post: int, **data):
+    item = item_of(post)
+    payload = {"definition_id": item.definition_id, "title": "제목 바꿈"}
+    people = {"process": place.worker, "review": place.reviewer, "confirm": place.final}
+    for step in definition(place).steps[1:]:
+        payload[f"p_{step['key']}"] = people[step["kind"]].id
+    files = data.pop("files", None)
+    return browser(place.writer).post(f"/flows/{post}/edit", data=payload | data, files=files)
+
+
+def test_confirm_return_locks_process_content_and_only_adds(place: Place) -> None:
+    post = confirm_return(place, 1)
+    page = browser(place.worker).get(f"/flows/{post}").text
+    # 이미 적은 내용은 보이지만 입력 칸에는 없다.
+    assert "처음 작업" in page and "처음 작업</textarea>" not in page
+    assert "추가됩니다" in page and "더 필요합니다" in page
+    before = {row.id: row.values for row in tasks_of(post) if row.status == "done"}
+    # 필수 항목은 이미 적었으므로 비워도 된다.
+    done(place.worker, post, v_f3="더 작업함")
+    after = {row.id: row.values for row in tasks_of(post) if row.id in before}
+    assert after == before
+    page = browser(place.reader).get(f"/flows/{post}").text
+    for text in ("처음 작업", "더 작업함", "처리 추가", "처음 검토", "작성 내용 잠금"):
+        assert text in page, text
+    # 다시 거치는 검토도 추가만 한다.
+    page = browser(place.reviewer).get(f"/flows/{post}").text
+    assert "처음 검토</textarea>" not in page and "추가됩니다" in page
+    done(place.reviewer, post)
+    done(place.final, post)
+    page = browser(place.reader).get(f"/flows/{post}").text
+    assert "처음 검토" in page and "더 작업함" in page
+    assert item_of(post).status == "done"
+    body = fetch(select(Post.body_md).where(Post.id == post))[0]
+    assert "처음 작업" in body and "더 작업함" in body
+
+
+def test_confirm_return_to_register_locks_title_and_values(place: Place) -> None:
+    post = confirm_return(place, 0, files=[("v_f2", ("시안.txt", b"1"))])
+    page = browser(place.writer).get(f"/flows/{post}/edit").text
+    assert "고칠 수 없고 추가만" in page and "표지를 고쳐 주세요" in page
+    assert 'name="title"' not in page and "표지를 고쳐 주세요</textarea>" not in page
+    assert 'name="k_f2"' not in page
+    # 조작해서 보내도 제목과 이전 값은 그대로다.
+    response = resubmit(
+        place, post, v_f1="수량도 바꿔 주세요", files=[("v_f2", ("로고.txt", b"2"))]
+    )
+    assert response.status_code == 200, response.text
+    assert fetch(select(Post.title).where(Post.id == post)) == ["브로슈어 2안"]
+    page = browser(place.reader).get(f"/flows/{post}").text
+    for text in ("표지를 고쳐 주세요", "수량도 바꿔 주세요", "등록 추가", "시안.txt", "로고.txt"):
+        assert text in page, text
+    done(place.worker, post)
+    done(place.reviewer, post)
+    done(place.final, post)
+    assert item_of(post).status == "done"
+
+
+def test_confirm_return_without_additions_is_allowed(place: Place) -> None:
+    """담당자만 바꾸려고 돌려보낼 수도 있다."""
+    post = confirm_return(place, 0)
+    assert resubmit(place, post).status_code == 200
+    page = browser(place.reader).get(f"/flows/{post}").text
+    assert "표지를 고쳐 주세요" in page and "등록 추가" not in page
+
+
+def test_lock_cannot_be_avoided_by_returning_further(place: Place) -> None:
+    """확정이 처리로 돌려보낸 뒤 처리자가 등록으로 돌려보내도 등록 내용은 잠겨 있다."""
+    post = confirm_return(place, 1)
+    assert act(place.worker, post, "return", target=0, reason="등록부터").status_code == 200
+    assert resubmit(place, post, v_f1="바꾼 내용").status_code == 200
+    page = browser(place.reader).get(f"/flows/{post}").text
+    assert "표지를 고쳐 주세요" in page and "바꾼 내용" in page
+    assert fetch(select(Post.title).where(Post.id == post)) == ["브로슈어 2안"]
+
+
+def test_addition_can_be_edited_until_next_confirm_return(place: Place) -> None:
+    post = confirm_return(place, 1)
+    done(place.worker, post, v_f3="추가 1")
+    assert act(place.reviewer, post, "return", target=1, reason="다시").status_code == 200
+    # 검토가 돌려보낸 것이므로 추가한 부분만 고칠 수 있다.
+    page = browser(place.worker).get(f"/flows/{post}").text
+    assert "추가 1</textarea>" in page and "처음 작업</textarea>" not in page
+    done(place.worker, post, v_f3="추가 1 고침")
+    done(place.reviewer, post, v_f5="검토 추가")
+    act(place.final, post, "return", target=1, reason="또 추가")
+    page = browser(place.worker).get(f"/flows/{post}").text
+    assert "추가 1 고침" in page and "추가 1 고침</textarea>" not in page
+    done(place.worker, post, v_f3="추가 2")
+    page = browser(place.reader).get(f"/flows/{post}").text
+    for text in ("처음 작업", "추가 1 고침", "추가 2", "처음 검토", "검토 추가"):
+        assert text in page, text
+
+
+def test_middle_confirm_return_also_locks() -> None:
+    place = make_place(middle_steps())
+    post = submitted(place)
+    process(place, post, "처음 작업")
+    assert act(place.final, post, "return", target=1, reason="더").status_code == 200
+    assert "처음 작업</textarea>" not in browser(place.worker).get(f"/flows/{post}").text
+    done(place.worker, post, v_f3="더 작업")
+    done(place.final, post, decision="finish")
+    page = browser(place.reader).get(f"/flows/{post}").text
+    assert "처음 작업" in page and "더 작업" in page
+
+
+def test_locked_file_cannot_be_claimed_or_dropped(place: Place) -> None:
+    post = submitted(place)
+    process(place, post, files=[("v_f4", ("초안.txt", b"1"))])
+    review(place, post)
+    act(place.final, post, "return", target=1, reason="더")
+    (file,) = fetch(select(Attachment))
+    done(place.worker, post, k_f4=file.id, files=[("v_f4", ("최종.txt", b"2"))])
+    first, second = [row for row in tasks_of(post) if row.step_no == 1 and row.status == "done"]
+    assert first.values["f4"] == [file.id] and file.id not in second.values["f4"]
+    page = browser(place.reader).get(f"/flows/{post}").text
+    assert "초안.txt" in page and "최종.txt" in page
+
+
+def test_new_assignee_of_everyone_step_still_fills_required(place: Place) -> None:
+    key = step_of(place, "review")["key"]
+    post = submitted(place, **{f"p_{key}": [place.reviewer.id]})
+    process(place, post)
+    review(place, post)
+    act(place.final, post, "return", target=2, reason="다시")
+    data = {"old_id": "", "new_id": place.reader.id, "reason": "검토자 추가"}
+    assert browser(place.manager).post(f"/flows/{post}/reassign", data=data).status_code == 200
+    assert "필수" in act(place.reader, post).json()["detail"]
+    done(place.reader, post, v_f5="저도 봤습니다")
+    done(place.reviewer, post)
+    assert item_of(post).current_step == 3
+
+
+def test_cancel_after_addition_reopens_only_addition(place: Place) -> None:
+    post = confirm_return(place, 1)
+    done(place.worker, post, v_f3="추가함")
+    assert act(place.worker, post, "cancel").status_code == 200
+    page = browser(place.worker).get(f"/flows/{post}").text
+    assert "추가함</textarea>" in page and "처음 작업</textarea>" not in page
+
+
+def test_approval_copy_and_new_copy_include_locked_content(place: Place) -> None:
+    channel = add_expense(place, place.writer)
+    post = confirm_return(place, 1)
+    done(place.worker, post, v_f3="더 작업함")
+    done(place.reviewer, post)
+    done(place.final, post)
+    page = browser(place.writer).get(f"/channels/{channel.id}/approvals/new?flow={post}").text
+    assert "처음 작업" in page and "더 작업함" in page and "처음 검토" in page
+
+    other = confirm_return(place, 0)
+    assert resubmit(place, other, v_f1="더한 내용").status_code == 200
+    process(place, other)
+    done(place.reviewer, other)
+    act(place.final, other, "reject", reason="안 됨")
+    copied = browser(place.writer).post(f"/flows/{other}/copy").headers["HX-Redirect"]
+    values = item_of(int(copied.split("/")[2])).values
+    assert values["f1"] == "표지를 고쳐 주세요\n\n더한 내용"
 
 
 def test_processor_still_cannot_review_after_return_to_review(place: Place) -> None:

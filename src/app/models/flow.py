@@ -10,6 +10,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
     func,
     text,
 )
@@ -114,6 +115,8 @@ class FlowSubmission(Base):
     title: Mapped[str] = mapped_column(String(200))
     values: Mapped[dict] = mapped_column(JSONB)
     picks: Mapped[dict] = mapped_column(JSONB)
+    # 확정 단계가 돌려보내 잠긴 내용. 이후의 제출은 추가한 내용만 담는다.
+    locked: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     submitted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -158,6 +161,8 @@ class FlowTask(Base):
     return_to: Mapped[int | None] = mapped_column(Integer)
     values: Mapped[dict] = mapped_column(JSONB, default=dict)
     comment: Mapped[str | None] = mapped_column(Text)
+    # 확정 단계가 돌려보내 잠긴 완료. 다시 한 완료는 추가한 내용만 담는다.
+    locked: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     acted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

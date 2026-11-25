@@ -384,6 +384,31 @@ def parse_values(
     return values, people
 
 
+def relaxed(fields: Sequence[dict], written: Sequence[Values]) -> list[dict]:
+    """추가만 하는 화면의 항목. 이미 적은 항목은 다시 적지 않아도 된다."""
+    return [
+        {**item, "required": item["required"] and not any(item["key"] in row for row in written)}
+        for item in fields
+    ]
+
+
+def merge_values(fields: Sequence[dict], parts: Sequence[Values]) -> Values:
+    """잠긴 내용과 추가한 내용을 하나로 합친다. 새로 등록에 채울 때만 쓴다."""
+    merged: Values = {}
+    for item in fields:
+        key = item["key"]
+        found = [row[key] for row in parts if key in row]
+        if not found:
+            continue
+        if item["kind"] == "markdown":
+            merged[key] = "\n\n".join(found)[:MARKDOWN_LENGTH]
+        elif item["kind"] in ("file", "multiselect") or item.get("multiple"):
+            merged[key] = list(dict.fromkeys(one for value in found for one in value))
+        else:
+            merged[key] = found[-1]
+    return merged
+
+
 def carry_values(old: Sequence[dict], new: Sequence[dict], values: Values) -> Values:
     """판이 바뀌어도 번호와 종류가 같은 항목의 값은 이어 쓴다."""
     kinds = {item["key"]: item["kind"] for item in old}

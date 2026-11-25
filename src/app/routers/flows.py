@@ -53,7 +53,9 @@ from app.services.flow_rules import (
     dropped_labels,
     has_list,
     is_picked,
+    merge_values,
     parse_values,
+    relaxed,
 )
 from app.services.flow_views import (
     TABS,
@@ -61,6 +63,7 @@ from app.services.flow_views import (
     field_inputs,
     flow_list,
     load_files,
+    locked_sections,
     open_items,
 )
 from app.services.flows import FlowDoc, load_doc
@@ -384,8 +387,13 @@ async def form_page(
     picks: dict,
     dropped: list[str] | None = None,
     reason: str = "",
+    doc: FlowDoc | None = None,
 ) -> HTMLResponse:
     returned = item is not None and item.status == "returned"
+    fields = [row for row in definition.steps[0]["fields"] if row["key"] != "title"]
+    locked = doc is not None and doc.register_locked
+    if locked:
+        fields = relaxed(fields, [row.values for row in doc.submissions if row.locked])
     return templates.TemplateResponse(
         request,
         "flow_form.html",
@@ -402,9 +410,10 @@ async def form_page(
             "inputs": await field_inputs(
                 session,
                 post.id if post else None,
-                [row for row in definition.steps[0]["fields"] if row["key"] != "title"],
+                fields,
                 values,
             ),
+            "locked_sections": await locked_sections(session, doc) if locked else [],
             "picks": await pick_rows(session, definition, channel, picks),
             "dropped": dropped or [],
             "people_url": f"/flows/{post.id}/people"
@@ -511,10 +520,15 @@ async def save_item(
     *,
     submitting: bool,
 ) -> None:
+    locked = doc.register_locked
     title = " ".join(str(submitted.form.get("title") or "").split())
+    if locked:
+        title = doc.post.title or ""
     if not title or len(title) > 200:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "제목을 200자까지 입력해 주세요.")
     fields = [row for row in doc.steps[0]["fields"] if row["key"] != "title"]
+    if locked:
+        fields = relaxed(fields, [row.values for row in doc.submissions if row.locked])
     old_files = {
         one
         for row in fields
@@ -647,6 +661,7 @@ async def edit_page(
         picks=picks,
         dropped=dropped,
         reason=(back[-1].comment or "") if back and doc.item.status == "returned" else "",
+        doc=doc,
     )
 
 
@@ -697,7 +712,8 @@ async def copy_flow(post_id: int, session: SessionDep, authz: AuthzDep) -> Respo
     doc = await own_doc(session, authz, post_id, "rejected", "withdrawn", "discarded", lock=True)
     channel, _, definition = await drafting_flow(session, authz, doc.channel.id)
     old, new = doc.steps[0]["fields"], definition.steps[0]["fields"]
-    values = carry_values(old, new, doc.item.values)
+    written = merge_values(old, [values for values, _ in doc.registrations()])
+    values = carry_values(old, new, written)
     post = Post(
         channel_id=channel.id,
         author_id=authz.user.id,
@@ -903,10 +919,12 @@ async def complete(
     previous: dict = {}
     for row in doc.tasks:
         # 다시 할 때는 그 단계에서 냈던 첨부를 남길 수 있다.
-        if row.step_no == doc.item.current_step:
+        if row.step_no == doc.item.current_step and row.round > doc.locked_round(row.step_no):
             for key, value in row.values.items():
                 if isinstance(value, list):
                     previous[key] = [*previous.get(key, []), *value]
+    # 확정 단계가 돌려보낸 뒤에는 추가한 내용만 받는다. 잠긴 값은 화면에서 오지 않는다.
+    fields = relaxed(fields, doc.written(authz.user.id))
     values = await store_values(
         session,
         doc.post,

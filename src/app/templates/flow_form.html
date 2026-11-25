@@ -1,6 +1,7 @@
 {% extends "channel_page.html" %}
 {% from "partials/icons.html" import icon %}
 {% from "partials/flow_fields.html" import flow_fields, people_picker %}
+{% from "partials/flow_values.html" import flow_values %}
 {% block title %}{{ "보완" if returned else "새 등록" }} · 바로채널{% endblock %}
 {% block content %}
 <a class="back" href="{{ '/flows/%d' % post.id if post else '/channels/%d' % channel.id }}">{{ icon("back") }}{{ title_text or channel.name }}</a>
@@ -9,7 +10,14 @@
 {% if dropped %}<p class="notice">양식이 새로 발행되어 다음 항목의 값은 사라집니다: {{ dropped|join(", ") }}</p>{% endif %}
 <form class="section stack" hx-post="{{ '/flows/%d/edit' % post.id if post else '/channels/%d/flows' % channel.id }}" hx-encoding="multipart/form-data" hx-swap="none">
   <input type="hidden" name="definition_id" value="{{ definition.id }}">
+  {% if locked_sections %}
+  <h2>{{ title_text }}</h2>
+  <p class="muted">확정 단계에서 돌려보낸 건입니다. 이미 작성한 내용은 고칠 수 없고 추가만 할 수 있습니다.</p>
+  {% for section in locked_sections %}{{ flow_values(section) }}{% endfor %}
+  <h2>추가할 내용</h2>
+  {% else %}
   <label><span>제목 <b class="required">필수</b></span> <input name="title" required maxlength="200" value="{{ title_text }}"></label>
+  {% endif %}
   {{ flow_fields(inputs, people_url) }}
   <h2>담당자</h2>
   {% for row in picks %}

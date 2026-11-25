@@ -148,6 +148,7 @@ FIELDS: dict[str, tuple[str, str | None]] = {
     "label": ("처리", None),
     "decision": ("중간 확정", None),
     "return_to": ("돌려보낸 단계", None),
+    "locked": ("작성 내용 잠금", None),
     "round": ("회차", None),
     "version": ("버전", None),
     "reply_id": ("답글", None),

@@ -13,6 +13,7 @@
     <input type="hidden" name="round" value="{{ action.round }}">
     <input type="hidden" name="step_no" value="{{ action.step_no }}">
     <input type="hidden" name="seen" value="{{ action.seen }}">
+    {% if action.add_only %}<p class="muted">확정 단계에서 돌려보낸 건입니다. 위에 이미 작성한 내용은 고칠 수 없고, 여기에 적은 내용이 추가됩니다.</p>{% endif %}
     {{ flow_fields(action.inputs, people_url) }}
     <label><span>의견 <small class="muted">선택</small></span><textarea name="comment" rows="2" maxlength="1000">{{ action.comment }}</textarea></label>
     {% if action.middle %}
@@ -33,7 +34,7 @@
       <label>돌려보낼 단계
         <select name="target">{% for number, label in action.targets %}<option value="{{ number }}">{{ number + 1 }}. {{ label }}</option>{% endfor %}</select>
       </label>
-      <p class="muted">고른 단계부터 차례대로 다시 진행합니다.</p>
+      <p class="muted">고른 단계부터 차례대로 다시 진행합니다.{% if action.can_reject %} 지금까지 작성한 내용은 잠겨, 앞 단계에서는 고치지 못하고 추가만 합니다.{% endif %}</p>
       <textarea name="reason" rows="2" maxlength="1000" required placeholder="보완할 내용" aria-label="보완할 내용"></textarea>
       <button>보완 요청</button>
     </form>

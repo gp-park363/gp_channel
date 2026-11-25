@@ -284,6 +284,7 @@ class FlowDoc:
     tasks: list[FlowTask] = field(default_factory=list)
     # 단계 번호별로 등록자가 지정한 사람.
     picks: dict[str, list[int]] = field(default_factory=dict)
+    submissions: list[FlowSubmission] = field(default_factory=list)
 
     @property
     def steps(self) -> list[Step]:
@@ -321,20 +322,74 @@ class FlowDoc:
         )
 
     def completions(self) -> dict[int, list[FlowTask]]:
-        """지금도 유효한 완료. 되돌아가 다시 한 단계는 마지막 회차만 유효하다."""
+        """지금도 유효한 완료. 되돌아가 다시 한 단계는 마지막 회차만 유효하다.
+
+        확정 단계가 돌려보내 잠긴 완료는 그대로 남고, 다시 한 완료는 그 뒤에 추가된다.
+        """
         item = self.item
-        if item.status == "done" and item.closed_step is not None:
-            limit = item.closed_step
-        else:
-            limit = item.current_step - 1
-        found: dict[int, list[FlowTask]] = defaultdict(list)
-        for task in self.tasks:
-            if task.status == "done" and 0 < task.step_no <= limit:
-                found[task.step_no].append(task)
-        return {
-            number: [task for task in rows if task.round == max(row.round for row in rows)]
-            for number, rows in found.items()
-        }
+        found: dict[int, list[FlowTask]] = {}
+        for number in range(1, len(self.steps)):
+            if item.status == "done" and number > self.finished:
+                continue
+            rows = self.locked_tasks(number)
+            since = self.locked_round(number)
+            redone = [
+                task
+                for task in self.tasks
+                if task.step_no == number
+                and task.status == "done"
+                and number <= self.finished
+                and task.round > since
+            ]
+            newest = max((task.round for task in redone), default=0)
+            rows += [task for task in redone if task.round == newest]
+            if rows:
+                found[number] = rows
+        return found
+
+    @property
+    def finished(self) -> int:
+        """끝난 마지막 단계."""
+        if self.item.status == "done" and self.item.closed_step is not None:
+            return self.item.closed_step
+        return self.item.current_step - 1
+
+    def locked_tasks(self, step_no: int) -> list[FlowTask]:
+        return [task for task in self.tasks if task.locked and task.step_no == step_no]
+
+    def locked_round(self, step_no: int) -> int:
+        """이 회차까지의 작성 내용은 고칠 수 없다. 0이면 잠긴 적이 없다."""
+        return max((task.round for task in self.locked_tasks(step_no)), default=0)
+
+    def registrations(self) -> list[tuple[dict, datetime | None]]:
+        """유효한 등록 값. 잠긴 제출 뒤에 추가한 내용이 이어진다."""
+        blocks = self.locked_registrations()
+        if not blocks:
+            return [(self.item.values, self.item.submitted_at)]
+        if self.item.values:
+            latest = self.submissions[-1]
+            blocks.append((self.item.values, None if latest.locked else latest.submitted_at))
+        return blocks
+
+    def locked_registrations(self) -> list[tuple[dict, datetime | None]]:
+        """잠긴 등록 값. 추가한 것이 없는 제출은 뺀다."""
+        rows = [row for row in self.submissions if row.locked]
+        return [
+            (row.values, row.submitted_at)
+            for number, row in enumerate(rows)
+            if number == 0 or row.values
+        ]
+
+    @property
+    def register_locked(self) -> bool:
+        return any(row.locked for row in self.submissions)
+
+    def written(self, user_id: int) -> list[dict]:
+        """지금 단계를 추가만 할 수 있을 때 이미 적은 값. 전원 완료면 본인 것만 본다."""
+        rows = self.locked_tasks(self.item.current_step)
+        if self.step.get("complete") == "all":
+            rows = [task for task in rows if task.assignee_id == user_id]
+        return [task.values for task in rows]
 
     def excluded(self, step_no: int) -> set[int]:
         """등록자는 검토·확정을, 처리한 사람은 뒤의 검토를 하지 않는다."""
@@ -369,7 +424,21 @@ async def load_doc(
         .order_by(FlowTask.id)
         .execution_options(populate_existing=True)
     )
-    return FlowDoc(post, channel, item, definition, list(tasks), await load_picks(session, item.id))
+    submissions = await session.scalars(
+        select(FlowSubmission)
+        .where(FlowSubmission.item_id == item.id)
+        .order_by(FlowSubmission.round)
+        .execution_options(populate_existing=True)
+    )
+    return FlowDoc(
+        post,
+        channel,
+        item,
+        definition,
+        list(tasks),
+        await load_picks(session, item.id),
+        list(submissions),
+    )
 
 
 async def load_picks(session: AsyncSession, item_id: int) -> dict[str, list[int]]:
@@ -541,16 +610,17 @@ async def submit(session: AsyncSession, doc: FlowDoc, actor: User) -> set[int]:
     if item.submitted_at is None:
         item.submitted_at = now
     doc.post.is_draft = False
-    session.add(
-        FlowSubmission(
-            item_id=item.id,
-            round=item.round,
-            title=doc.post.title or "",
-            values=item.values,
-            picks=doc.picks,
-            submitted_at=now,
-        )
+    submission = FlowSubmission(
+        item_id=item.id,
+        round=item.round,
+        title=doc.post.title or "",
+        values=item.values,
+        picks=doc.picks,
+        locked=False,
+        submitted_at=now,
     )
+    session.add(submission)
+    doc.submissions.append(submission)
     # 처음 제출할 때와 다시 제출할 때를 구분해 이력에 보여준다.
     audit(
         session,
@@ -633,6 +703,21 @@ def return_targets(doc: FlowDoc) -> list[int]:
     return [default, *[number for number in before if number != default]]
 
 
+def lock_written(doc: FlowDoc) -> None:
+    """확정 단계가 돌려보낼 때 앞 단계에 적은 내용을 모두 잠근다.
+
+    돌려보낸 단계만 잠그면 그 단계에서 더 앞으로 돌려보내 고칠 수 있다.
+    """
+    for number, rows in doc.completions().items():
+        if number < doc.item.current_step and doc.steps[number]["kind"] != "confirm":
+            for task in rows:
+                task.locked = True
+    if not doc.submissions[-1].locked:
+        doc.submissions[-1].locked = True
+        # 이제부터는 추가한 내용만 담는다.
+        doc.item.values = {}
+
+
 async def send_back(
     session: AsyncSession, doc: FlowDoc, task: FlowTask, actor: User, target: int, reason: str
 ) -> set[int]:
@@ -640,6 +725,7 @@ async def send_back(
         raise FlowError("돌려보낼 단계를 확인해 주세요.")
     now = touch(doc)
     changed = waiting_ids(doc) | {doc.item.registrant_id}
+    locking = doc.step["kind"] == "confirm"
     audit(
         session,
         doc,
@@ -648,7 +734,10 @@ async def send_back(
         step=doc.step["label"],
         return_to=doc.steps[target]["label"],
         reason=reason,
+        locked=locking,
     )
+    if locking:
+        lock_written(doc)
     for row in doc.current_tasks:
         if row.status == "waiting":
             row.status = "returned" if row is task else "skipped"
@@ -959,7 +1048,9 @@ def rebuild_body(doc: FlowDoc) -> None:
             elif item["kind"] == "multiselect" and value:
                 parts.append(f"{item['label']}: {', '.join(value)}")
 
-    collect([item for item in doc.steps[0]["fields"] if item["key"] != "title"], doc.item.values)
+    register = [item for item in doc.steps[0]["fields"] if item["key"] != "title"]
+    for values, _ in doc.registrations():
+        collect(register, values)
     for number, rows in sorted(doc.completions().items()):
         for task in rows:
             collect(doc.steps[number]["fields"], task.values)

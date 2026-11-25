@@ -34,6 +34,7 @@ from app.services.flow_rules import (
     DONE_LABELS,
     is_middle_confirm,
     pages,
+    relaxed,
 )
 from app.services.flows import (
     FlowDoc,
@@ -225,7 +226,11 @@ def step_chips(
                 )
             )
             continue
-        done = completions.get(number)
+        done = completions.get(number) if number <= doc.finished else None
+        if done:
+            # 추가한 내용이 있으면 마지막에 한 사람과 시각을 보여준다.
+            newest = max(task.round for task in done)
+            done = [task for task in done if task.round == newest]
         active = item.status == "in_progress" and number == item.current_step
         if done and not active:
             people = [names.get(task.assignee_id, "") for task in done]
@@ -299,6 +304,8 @@ async def _events(session: AsyncSession, doc: FlowDoc) -> list[EventView]:
             text = f"{'다시 제출' if detail['round'] > 1 else '제출'} · {detail['round']}회차"
         elif row.action == "flow.return":
             text += f" → {detail['return_to']}"
+            if detail.get("locked"):
+                text += " · 작성 내용 잠금"
         elif row.action == "flow.reassign":
             before = ", ".join(names.get(one, "") for one in detail["before"])
             after = ", ".join(names.get(one, "") for one in detail["after"])
@@ -358,19 +365,12 @@ def sections_of(
 ) -> list[Section]:
     """지금 유효한 값. 등록 값과 완료한 단계의 값이다."""
     item = doc.item
-    sections = [
-        Section(
-            doc.steps[0]["label"],
-            names.get(item.registrant_id, ""),
-            item.submitted_at,
-            value_views(doc.steps[0]["fields"], item.values, files, names),
-        )
-    ]
+    sections = register_sections(doc, files, names)
     shown = dict(doc.completions())
     # 전원 완료 단계에서 먼저 낸 값도 보여준다.
     current = [task for task in doc.current_tasks if task.status == "done"]
     if current:
-        shown[item.current_step] = current
+        shown[item.current_step] = [*doc.locked_tasks(item.current_step), *current]
     for _, rows in sorted(shown.items()):
         # 입력도 의견도 없는 확정은 단계 표시로 충분하다.
         found = [_task_section(doc, task, files, names) for task in rows]
@@ -378,12 +378,39 @@ def sections_of(
     return sections
 
 
+def register_sections(
+    doc: FlowDoc, files: Mapping[int, Attachment], names: Mapping[int, str]
+) -> list[Section]:
+    label = doc.steps[0]["label"]
+    return [
+        Section(
+            f"{label} 추가" if number else label,
+            names.get(doc.item.registrant_id, ""),
+            at,
+            value_views(doc.steps[0]["fields"], values, files, names),
+        )
+        for number, (values, at) in enumerate(doc.registrations())
+    ]
+
+
+async def locked_sections(session: AsyncSession, doc: FlowDoc) -> list[Section]:
+    """보완 화면에서 고칠 수 없게 보여주는 등록 내용."""
+    blocks = [values for values, _ in doc.locked_registrations()]
+    register = doc.steps[0]["fields"]
+    people = {doc.item.registrant_id}.union(*(_person_ids(register, one) for one in blocks))
+    files = await load_files(
+        session, doc.post.id, set().union(*(_file_ids(register, one) for one in blocks))
+    )
+    return register_sections(doc, files, await names_of(session, people))[: len(blocks)]
+
+
 def _task_section(
     doc: FlowDoc, task: FlowTask, files: Mapping[int, Attachment], names: Mapping[int, str]
 ) -> Section:
     step = doc.steps[task.step_no]
+    first = min((row.round for row in doc.locked_tasks(task.step_no)), default=task.round)
     return Section(
-        step["label"],
+        f"{step['label']} 추가" if task.round > first else step["label"],
         names.get(task.assignee_id, ""),
         task.acted_at,
         value_views(step["fields"], task.values, files, names),
@@ -402,7 +429,7 @@ def _old_rounds(
     latest = max((row.round for row in submissions), default=0)
     found: dict[int, list[Section]] = defaultdict(list)
     for row in submissions:
-        if row.round < latest:
+        if row.round < latest and not row.locked:
             section = Section(
                 f"{doc.steps[0]['label']}: {row.title}",
                 names.get(doc.item.registrant_id, ""),
@@ -432,13 +459,7 @@ async def flow_views(
 
 async def flow_view(session: AsyncSession, doc: FlowDoc, user_id: int) -> FlowView:
     item = doc.item
-    submissions = list(
-        await session.scalars(
-            select(FlowSubmission)
-            .where(FlowSubmission.item_id == item.id)
-            .order_by(FlowSubmission.round)
-        )
-    )
+    submissions = doc.submissions
     register = doc.steps[0]["fields"]
     blocks = [(register, item.values), *[(register, row.values) for row in submissions]]
     blocks += [(doc.steps[task.step_no]["fields"], task.values) for task in doc.tasks]
@@ -525,6 +546,8 @@ class ActionView:
     step_no: int
     seen: int
     complete_label: str = ""
+    # 확정 단계가 돌려보내 이 단계에 추가만 할 수 있다.
+    add_only: bool = False
 
 
 async def field_inputs(
@@ -553,7 +576,10 @@ def previous_task(doc: FlowDoc, user_id: int) -> FlowTask | None:
     old = [
         row
         for row in doc.tasks
-        if row.step_no == doc.item.current_step and row.values and row.status != "waiting"
+        if row.step_no == doc.item.current_step
+        and row.values
+        and row.status != "waiting"
+        and row.round > doc.locked_round(doc.item.current_step)
     ]
     own = [row for row in old if row.assignee_id == user_id]
     return (own or old or [None])[-1]
@@ -567,10 +593,17 @@ async def action_view(session: AsyncSession, doc: FlowDoc, user_id: int) -> Acti
     number = doc.item.current_step
     middle = is_middle_confirm(doc.steps, number)
     before = previous_task(doc, user_id)
+    add_only = doc.locked_round(number) > 0
+    if before is not None:
+        values = before.values
+    elif add_only:
+        values = {}
+    else:
+        values = {row["key"]: row["template"] for row in step["fields"] if row.get("template")}
     return ActionView(
         step=step,
         inputs=await field_inputs(
-            session, doc.post.id, step["fields"], before.values if before else {}
+            session, doc.post.id, relaxed(step["fields"], doc.written(user_id)), values
         ),
         comment=task.comment or "",
         done_label=DONE_LABELS[step["kind"]],
@@ -582,6 +615,7 @@ async def action_view(session: AsyncSession, doc: FlowDoc, user_id: int) -> Acti
         step_no=number,
         seen=await last_note_id(session, doc.item.id),
         complete_label=COMPLETE_KINDS[step["complete"]],
+        add_only=add_only,
     )
 
 
@@ -968,7 +1002,9 @@ async def approval_body(
         (note_tag(doc.steps, note, name), post.body_md, [row.file_name for row in attached])
         for note, post, name, attached in await load_notes(session, doc)
     ]
-    blocks = [(doc.steps[0], doc.item.registrant_id, doc.item.submitted_at, doc.item.values, "")]
+    blocks = [
+        (doc.steps[0], doc.item.registrant_id, at, values, "") for values, at in doc.registrations()
+    ]
     for number, rows in sorted(doc.completions().items()):
         blocks += [
             (doc.steps[number], task.assignee_id, task.acted_at, task.values, task.comment or "")
@@ -1035,7 +1071,9 @@ async def approval_body(
 
 async def approval_files(session: AsyncSession, doc: FlowDoc) -> list[Attachment]:
     """사본에 들어가는 값과 추가 내용의 첨부. 이전 회차의 첨부는 뺀다."""
-    ids = _file_ids(doc.steps[0]["fields"], doc.item.values)
+    ids = set()
+    for values, _ in doc.registrations():
+        ids |= _file_ids(doc.steps[0]["fields"], values)
     for number, rows in doc.completions().items():
         for task in rows:
             ids |= _file_ids(doc.steps[number]["fields"], task.values)
@@ -1046,7 +1084,9 @@ async def approval_files(session: AsyncSession, doc: FlowDoc) -> list[Attachment
 
 
 async def body_names(session: AsyncSession, doc: FlowDoc) -> dict[int, str]:
-    people = {doc.item.registrant_id} | _person_ids(doc.steps[0]["fields"], doc.item.values)
+    people = {doc.item.registrant_id}
+    for values, _ in doc.registrations():
+        people |= _person_ids(doc.steps[0]["fields"], values)
     for number, rows in doc.completions().items():
         for task in rows:
             people.add(task.assignee_id)
