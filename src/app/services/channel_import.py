@@ -12,6 +12,7 @@ from anyio import to_thread
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.models import (
     CHANNEL_TYPES,
     Channel,
@@ -32,7 +33,7 @@ from app.services.bulk_import import (
     format_path,
     parse_path,
 )
-from app.services.permissions import PERMISSIONS, normalize_grant
+from app.services.permissions import PERMISSIONS, available_types, normalize_grant
 from app.services.spreadsheet import Choice, Row, SheetSpec, build_workbook
 
 CHANNEL_SHEET = "채널"
@@ -44,7 +45,6 @@ CHANNEL_SPECS = {
     CHANNEL_SHEET: SheetSpec(CHANNEL_COLUMNS, ("그룹", "채널")),
     GRANT_SHEET: SheetSpec(GRANT_COLUMNS, ("그룹", "대상")),
 }
-TYPE_BY_LABEL = {label: key for key, label in CHANNEL_TYPES.items()}
 SETTINGS = {"허용": "allow", "거부": "deny", "": None}
 SETTING_LABELS = {"allow": "허용", "deny": "거부", None: ""}
 PIN_MAX = 50
@@ -86,7 +86,11 @@ class GrantPlan:
 class Scope:
     """편집할 수 있는 그룹과 그 안의 채널. 이름이 겹치면 고를 수 없다."""
 
-    def __init__(self, groups: list[WorkspaceGroup], channels: list[Channel]) -> None:
+    def __init__(
+        self, groups: list[WorkspaceGroup], channels: list[Channel], types: dict[str, str]
+    ) -> None:
+        # 새로 만들 수 있는 유형의 이름과 값.
+        self.types = {label: key for key, label in types.items()}
         self.groups: dict[str, list[WorkspaceGroup]] = {}
         for group in groups:
             self.groups.setdefault(group.name, []).append(group)
@@ -115,7 +119,8 @@ async def _scope(session: AsyncSession, group_ids: set[int] | None) -> Scope:
             select(Channel).where(Channel.group_id.in_([group.id for group in groups]))
         )
     )
-    return Scope(groups, channels)
+    # 샘플 데이터는 사용을 중지한 유형도 만들어 둔다. 켜면 바로 쓸 수 있다.
+    return Scope(groups, channels, CHANNEL_TYPES if group_ids is None else available_types())
 
 
 def _channel_text(group: WorkspaceGroup, name: str | None) -> str:
@@ -135,8 +140,8 @@ def _check_channels(
         if not name or len(name) > NAME_MAX:
             problems.append(f"채널 이름은 1~{NAME_MAX}자로 적어 주세요.")
         label = row.get("유형")
-        if label and label not in TYPE_BY_LABEL:
-            problems.append(f"유형은 {', '.join(TYPE_BY_LABEL)} 중 하나로 적어 주세요.")
+        if label and label not in scope.types:
+            problems.append(f"유형은 {', '.join(scope.types)} 중 하나로 적어 주세요.")
         order, order_ok = _number(row.get("순서"), ORDER_MAX)
         if not order_ok:
             problems.append(f"순서는 0~{ORDER_MAX} 사이의 숫자로 적어 주세요.")
@@ -155,14 +160,14 @@ def _check_channels(
             existing = matches[0] if matches else None
             if existing is None and not label:
                 problems.append("새 채널은 유형을 적어 주세요.")
-            if existing is not None and label and TYPE_BY_LABEL.get(label) != existing.type:
+            if existing is not None and label and scope.types.get(label) != existing.type:
                 problems.append("채널 유형은 바꿀 수 없습니다.")
         for problem in problems:
             report.error(CHANNEL_SHEET, row, problem)
         if problems or group is None:
             continue
 
-        channel_type = existing.type if existing else TYPE_BY_LABEL[label]
+        channel_type = existing.type if existing else scope.types[label]
         plans[(group.id, name)] = ChannelPlan(group, name, existing, channel_type, order, pin_limit)
         if existing is None:
             report.change("채널 추가", f"{_channel_text(group, name)} ({label})")
@@ -427,7 +432,7 @@ CHANNEL_GUIDE = [
     "채널·권한 일괄 등록 안내",
     "· 관리하는 그룹에만 쓸 수 있습니다. 그룹은 이름으로, 채널은 그룹과 채널 이름으로 찾습니다.",
     "· '채널' 시트: 없는 채널은 새로 만들고, 있는 채널은 적은 칸(순서, 고정 글 수)만 바꿉니다. "
-    "유형(소통, 투표, 문서, 결재, 업무)은 새 채널에만 필요하며 만든 뒤에는 바꿀 수 없습니다.",
+    "유형은 새 채널에만 필요하며 만든 뒤에는 바꿀 수 없습니다.",
     "· 채널 이름 변경과 결재 채널의 승인선·발신 설정은 채널 설정 화면에서 합니다.",
     "· '권한' 시트: 채널 칸을 비우면 그룹 전체 권한입니다. "
     "대상은 사용자 이메일이나 '본사 > 개발팀' 같은 소속 경로로 적습니다.",
@@ -451,7 +456,10 @@ async def export_channels(session: AsyncSession, group_ids: set[int]) -> bytes:
     channels = list(
         await session.scalars(
             select(Channel)
-            .where(Channel.group_id.in_(group_ids))
+            .where(
+                Channel.group_id.in_(group_ids),
+                Channel.type.not_in(get_settings().disabled_channel_types),
+            )
             .order_by(Channel.group_id, Channel.sort_order, Channel.id)
         )
     )
@@ -510,7 +518,7 @@ async def export_channels(session: AsyncSession, group_ids: set[int]) -> bytes:
         CHANNEL_GUIDE,
         {
             (CHANNEL_SHEET, "그룹"): Choice(group_names),
-            (CHANNEL_SHEET, "유형"): Choice(tuple(CHANNEL_TYPES.values())),
+            (CHANNEL_SHEET, "유형"): Choice(tuple(available_types().values())),
             (GRANT_SHEET, "그룹"): Choice(group_names),
             (GRANT_SHEET, "채널"): Choice(source=(CHANNEL_SHEET, "채널"), strict=False),
             (GRANT_SHEET, "대상"): Choice(subjects, strict=False),

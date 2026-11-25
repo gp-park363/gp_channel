@@ -11,6 +11,7 @@
 {% if can_reply %}
 <form class="composer js-reset" hx-post="/posts/{{ root.post.id }}/replies" hx-encoding="multipart/form-data"
       hx-target="#thread-list" hx-swap="beforeend">
+  {% if root.flow and root.flow.can_note %}<label class="check flow-note-check"><input type="checkbox" name="flow_note" value="true"> 추가 내용으로 남기기 <span class="muted">건 화면에 모이고 고치거나 지울 수 없습니다</span></label>{% endif %}
   {% include "partials/composer_fields.html" %}
 </form>
 {% endif %}

@@ -2,9 +2,12 @@
 
 from dataclasses import dataclass
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.db import SessionLocal
 from app.core.templating import render_text
-from app.models import Channel, Post, User
+from app.models import Channel, FlowItem, Post, User
 from app.services.approvals import (
     my_references,
     my_reviews,
@@ -13,6 +16,7 @@ from app.services.approvals import (
     unread_notices,
 )
 from app.services.dispatch import receiving_for
+from app.services.flow_views import flow_todo_count, rows_for, stalled_flows
 from app.services.mentions import pending_acks
 from app.services.navigation import build_navigation, unread_payload
 from app.services.permissions import Authorizer, can_view_replies
@@ -47,6 +51,8 @@ async def todo_count(user_id: int) -> int | None:
         references = await my_references(session, user_id)
         waiting = len(turns) + len(reviews) + len(notices) + len(stalled) + len(receiving)
         waiting += len(references)
+        waiting += len(await stalled_flows(session, await authz.managed_group_ids()))
+        waiting += await flow_todo_count(session, user_id)
         return len(acks) + waiting
 
 
@@ -99,11 +105,15 @@ async def messages_for(event: Event, user_id: int) -> list[Message] | None:
         (view,) = await build_views(session, [post], authz, channel, access, parent)
         card = render_text("partials/post_card.html", v=view)
         messages: list[Message] = []
+        if channel.type == "flow":
+            messages += await flow_row_messages(session, event, channel, parent or post)
         if event.kind == "updated":
             messages.append((f"post-{post.id}", card))
             if parent is None and can_view_replies(access, post, user_id):
                 root = render_text("partials/thread_root.html", root=view)
                 messages.append((f"root-{post.id}", root))
+        elif parent is None and channel.type == "flow":
+            pass  # 목록에는 행을 보냈다.
         else:
             # 작성자의 다른 탭도 받아야 하므로 보낸다. 같은 글이 겹치면 브라우저가 버린다.
             target = f"thread-{parent.id}" if parent else f"ch-{channel.id}"
@@ -114,3 +124,16 @@ async def messages_for(event: Event, user_id: int) -> list[Message] | None:
                 (f"post-{parent.id}", render_text("partials/post_card.html", v=parent_view))
             )
         return messages
+
+
+async def flow_row_messages(
+    session: AsyncSession, event: Event, channel: Channel, root: Post
+) -> list[Message]:
+    """워크플로우 목록은 글 카드가 아니라 행을 받는다."""
+    item = await session.scalar(select(FlowItem).where(FlowItem.post_id == root.id))
+    if item is None:
+        return []
+    (row,) = await rows_for(session, [(item, root, channel)])
+    html = render_text("partials/flow_row.html", row=row)
+    created = event.kind == "created" and event.post_id == root.id
+    return [(f"ch-{channel.id}" if created else f"row-{root.id}", html)]

@@ -1,6 +1,6 @@
 # 업무 채널 기획
 
-2026-11-10 · 기준 문서 [barochannel.md](barochannel.md) · 상태: 확정, 개발 완료 · 개발 가이드 [work_integration_guide.md](work_integration_guide.md)
+2026-11-10 · 기준 문서 [barochannel.md](barochannel.md) · 상태: 확정, 개발 완료, **사용 중지(2026-11-25)** · 개발 가이드 [work_integration_guide.md](work_integration_guide.md)
 
 ## 1. 개요
 
@@ -21,6 +21,8 @@
 | 업무 메시지 | 화면이나 서버 훅이 채널에 남긴 글. 본문, 항목, 상세 링크, 외부 링크로 이뤄지고 고치지 않는다 |
 | 상세 화면 | 메시지의 **상세 보기**로 여는 화면. 외부 시스템에서 최신 상태를 불러온다 |
 | 서버 훅 | 외부 시스템이 서명한 요청으로 채널에 직접 메시지를 남기는 주소 |
+
+> **사용 중지:** 2026-11-25부터 업무 채널을 열지 않는다. `BARO_DISABLED_CHANNEL_TYPES`(기본값 `work`)로 중지하며, 새로 만들 수 없고 있던 채널은 화면·검색·서버 훅 모두 닫힌다. 명령어와 메시지는 지우지 않으므로 값을 비우고 서버를 다시 시작하면 그대로 이어 쓴다.
 
 ## 2. 핵심 원칙
 
@@ -328,6 +330,7 @@ Baro.close()                                     // 아무것도 남기지 않�
 | 환경 변수 | 뜻 |
 | --- | --- |
 | `BARO_INTEGRATION_ALLOWED_HOSTS` | 업무 채널이 부를 수 있는 "호스트" 또는 "호스트:포트", 쉼표로 구분. 연동 주소와 메시지 링크에 쓴다 |
+| `BARO_DISABLED_CHANNEL_TYPES` | 사용을 중지할 채널 유형(`work`, `flow`), 쉼표로 구분. 없으면 `work` |
 | `BARO_INTEGRATION_TIMEOUT_SECONDS` | 외부 호출 시간 제한. 기본 5초, 최대 30초 |
 
 ## 17. 샘플 할 일 시스템

@@ -1,0 +1,28 @@
+{% extends "channel_page.html" %}
+{% from "partials/icons.html" import icon %}
+{% from "partials/flow_fields.html" import flow_fields, people_picker %}
+{% block title %}{{ "보완" if returned else "새 등록" }} · 바로채널{% endblock %}
+{% block content %}
+<a class="back" href="{{ '/flows/%d' % post.id if post else '/channels/%d' % channel.id }}">{{ icon("back") }}{{ title_text or channel.name }}</a>
+<h1>{{ "보완해서 다시 제출" if returned else "새 등록" }}</h1>
+{% if reason %}<p class="reject-reason">보완 요청: {{ reason }}</p>{% endif %}
+{% if dropped %}<p class="notice">양식이 새로 발행되어 다음 항목의 값은 사라집니다: {{ dropped|join(", ") }}</p>{% endif %}
+<form class="section stack" hx-post="{{ '/flows/%d/edit' % post.id if post else '/channels/%d/flows' % channel.id }}" hx-encoding="multipart/form-data" hx-swap="none">
+  <input type="hidden" name="definition_id" value="{{ definition.id }}">
+  <label><span>제목 <b class="required">필수</b></span> <input name="title" required maxlength="200" value="{{ title_text }}"></label>
+  {{ flow_fields(inputs, people_url) }}
+  <h2>담당자</h2>
+  {% for row in picks %}
+  <fieldset class="planner-group">
+    <legend>{{ row.label }} <small class="muted">{{ row.role }} · {{ row.complete }} 완료{% if not row.picked %} · 고정 지정{% endif %}</small>{% if row.picked %} <b class="required">필수</b>{% endif %}</legend>
+    {% if row.picked %}{{ people_picker("p_" ~ row.key, people_url ~ "?step=" ~ row.key, row.people, max_people) }}
+    {% else %}<p>{{ row.people|map(attribute="name")|join(", ") or "등록된 담당자가 없습니다." }}</p>{% endif %}
+  </fieldset>
+  {% endfor %}
+  <div class="row">
+    {% if not returned %}<button name="action" value="draft" formnovalidate>임시저장</button>{% endif %}
+    <button class="primary" name="action" value="submit">{{ "다시 제출" if returned else "제출" }}</button>
+  </div>
+  <p class="muted">제출하면 내용이 잠깁니다. 이후 더할 내용은 쓰레드에 추가 내용으로 남깁니다.</p>
+</form>
+{% endblock %}

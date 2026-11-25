@@ -18,9 +18,11 @@ from app.models import (
     ApprovalReference,
     ApprovalReview,
     ApprovalStep,
+    Attachment,
     Channel,
     ChannelDispatchTarget,
     Department,
+    FlowApproval,
     Notification,
     Post,
     User,
@@ -57,10 +59,15 @@ from app.services.dispatch import (
     auto_dispatch,
     available_targets,
     copy_attachments,
+    copy_files,
     document_body,
     receivers,
     send,
 )
+from app.services.flow_rules import FlowError
+from app.services.flow_views import approval_body, approval_files, body_names
+from app.services.flows import FlowDoc, check_raise, load_doc, touch
+from app.services.flows import audit as flow_audit
 from app.services.navigation import build_navigation
 from app.services.permissions import NO_ACCESS, Authorizer, ChannelAccess, can_view_replies
 from app.services.post_views import build_views
@@ -210,6 +217,29 @@ async def drafting_channel(session: AsyncSession, authz: Authorizer, channel_id:
     return channel
 
 
+async def flow_document(
+    session: AsyncSession,
+    authz: Authorizer,
+    post_id: int,
+    channel: Channel,
+    *,
+    lock: bool = False,
+) -> FlowDoc:
+    """결재의 바탕이 되는 워크플로우 건. 올릴 수 있는 사람과 채널인지 확인한다."""
+    post, parent, source, _ = await post_context(session, authz, post_id, lock=lock)
+    doc = None
+    if parent is None and source.type == "flow" and post.deleted_at is None:
+        doc = await load_doc(session, post, source, lock=lock)
+    if doc is None:
+        raise not_found()
+    try:
+        await check_raise(session, doc, authz.user.id, channel.id)
+    except FlowError as error:
+        code = status.HTTP_409_CONFLICT if error.stale else status.HTTP_403_FORBIDDEN
+        raise HTTPException(code, str(error)) from error
+    return doc
+
+
 @router.get("/channels/{channel_id}/approvals/new", response_class=HTMLResponse)
 async def new_approval(
     request: Request,
@@ -217,12 +247,19 @@ async def new_approval(
     session: SessionDep,
     authz: AuthzDep,
     reference: Annotated[int | None, Query()] = None,
+    flow: Annotated[int | None, Query()] = None,
 ) -> HTMLResponse:
     channel, access = await channel_access(session, authz, channel_id)
     if channel.type != "approval" or not access.write:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "결재를 올릴 수 없습니다.")
     body = channel.approval_template_md or ""
     title = ""
+    flow_files: list[Attachment] = []
+    if flow is not None:
+        doc = await flow_document(session, authz, flow, channel)
+        body = await approval_body(session, doc, body, await body_names(session, doc))
+        title = doc.post.title or ""
+        flow_files = await approval_files(session, doc)
     if reference is not None:
         source = await reference_document(session, authz, reference)
         body = (await session.get(Post, source.post_id)).body_md
@@ -243,6 +280,8 @@ async def new_approval(
             "body": body,
             "title_text": title or "",
             "reference": reference,
+            "flow": flow,
+            "flow_files": flow_files,
             "planner": await planner_context(session, channel, Plan(line)),
         },
     )
@@ -257,6 +296,8 @@ async def create_approval(
     body: Body = "",
     department_id: Annotated[int | None, Form()] = None,
     reference_post_id: Annotated[int | None, Form()] = None,
+    flow_post_id: Annotated[int | None, Form()] = None,
+    flow_files: IdList = None,
     files: Files = None,
     plan: PlanMarker = None,
     line_ids: IdList = None,
@@ -291,22 +332,45 @@ async def create_approval(
         except PlanError as error:
             raise plan_failed(error) from error
 
+    # 건을 잠가 여러 사람이 동시에 올려도 먼저 저장한 한 건만 남는다.
+    source = (
+        await flow_document(session, authz, flow_post_id, channel, lock=True)
+        if flow_post_id is not None
+        else None
+    )
     post = Post(channel_id=channel.id, author_id=authz.user.id, body_md=body, is_draft=True)
     session.add(post)
     await session.flush()
-    session.add(
-        Approval(
-            post_id=post.id,
-            drafter_id=authz.user.id,
-            department_id=department_id,
-            title=title.strip(),
-            reference_post_id=reference_post_id,
-            plan=chosen.as_json() if chosen else None,
-        )
+    approval = Approval(
+        post_id=post.id,
+        drafter_id=authz.user.id,
+        department_id=department_id,
+        title=title.strip(),
+        reference_post_id=reference_post_id,
+        plan=chosen.as_json() if chosen else None,
     )
+    session.add(approval)
     await store_attachments(session, post, files)
     if reference_post_id is not None:
         await copy_attachments(session, reference_post_id, post.id)
+    if source is not None:
+        await session.flush()
+        picked = set(flow_files or [])
+        rows = [row for row in await approval_files(session, source) if row.id in picked]
+        await copy_files(session, rows, post.id)
+        session.add(
+            FlowApproval(approval_id=approval.id, item_id=source.item.id, created_by=authz.user.id)
+        )
+        flow_audit(
+            session,
+            source,
+            authz.user,
+            "approval",
+            approval_id=approval.id,
+            target_channel_id=channel.id,
+        )
+        touch(source)
+        await publish(session, Event("updated", source.channel.id, source.post.id, authz.user.id))
     await session.commit()
     return Response(headers={"HX-Redirect": f"/approvals/{post.id}"})
 

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.markdown import plain_summary, render_markdown
 from app.models import Attachment, Channel, MentionAck, Post, Reaction, User
 from app.services.approvals import ApprovalView, approval_views
+from app.services.flow_views import FlowView, flow_views, reply_notes
 from app.services.permissions import (
     Authorizer,
     ChannelAccess,
@@ -52,6 +53,9 @@ class PostView:
     approval: ApprovalView | None = None
     poll: PollView | None = None
     work: WorkView | None = None
+    flow: FlowView | None = None
+    # 워크플로우 쓰레드의 추가 내용 표시. 있으면 고치거나 지울 수 없다.
+    note: str = ""
 
     @property
     def is_reply(self) -> bool:
@@ -150,6 +154,14 @@ async def build_views(
     # 업무 메시지는 원글과 쓰레드 답글 어디에나 있다.
     works = await work_views(session, ids) if channel.type == "work" else {}
 
+    flows: dict[int, FlowView] = {}
+    notes: dict[int, str] = {}
+    if channel.type == "flow":
+        if parent is None:
+            flows = await flow_views(session, posts, channel, user.id)
+        else:
+            notes = await reply_notes(session, ids)
+
     is_manager = await authz.is_manager(channel)
     views = []
     for post in posts:
@@ -162,13 +174,17 @@ async def build_views(
         # F-58: 상신하면 본문과 첨부를 고칠 수 없고 지울 수도 없다.
         if post.id in approvals and not post.is_draft:
             can_change = False
+        # 건은 전용 화면에서만 고치고, 추가 내용은 고치거나 지울 수 없다.
+        if post.id in flows or post.id in notes:
+            can_change = False
         views.append(
             PostView(
                 post=post,
                 author_name=(post.id in works and works[post.id].author_name)
                 or authors.get(post.author_id, ""),
                 body_html=None if deleted else render_markdown(post.body_md),
-                attachments=[] if deleted else attachments[post.id],
+                # 건의 첨부는 항목별로 보여준다.
+                attachments=[] if deleted or post.id in flows else attachments[post.id],
                 reactions=[
                     reactions[post.id][emoji] for emoji in EMOJIS if emoji in reactions[post.id]
                 ],
@@ -185,9 +201,14 @@ async def build_views(
                 and not deleted
                 and not (channel.type == "doc" and parent is None),
                 can_react=access.read and not deleted,
-                can_open_thread=parent is None and can_view_replies(access, post, user.id),
+                can_open_thread=parent is None
+                and can_view_replies(access, post, user.id)
+                and not (channel.type == "flow" and post.is_draft),
                 can_pin=(
-                    parent is None and not deleted and channel.type != "approval" and is_manager
+                    parent is None
+                    and not deleted
+                    and channel.type not in ("approval", "flow")
+                    and is_manager
                 ),
                 ack_total=0 if deleted else len(acks[post.id]),
                 ack_done=sum(done for _, _, done in acks[post.id]),
@@ -197,6 +218,8 @@ async def build_views(
                 approval=approvals.get(post.id),
                 poll=None if deleted else polls.get(post.id),
                 work=None if deleted else works.get(post.id),
+                flow=None if deleted else flows.get(post.id),
+                note=notes.get(post.id, ""),
             )
         )
     return views

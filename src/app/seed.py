@@ -19,6 +19,10 @@ from app.models import (
     Attachment,
     Channel,
     Department,
+    FlowApprovalTarget,
+    FlowAssignee,
+    FlowDefinition,
+    FlowItem,
     Poll,
     PollOption,
     PollVote,
@@ -32,6 +36,8 @@ from app.services.admin import ADMIN_NAME
 from app.services.audit import record_audit
 from app.services.bulk_import import GROUP_SPECS, ORG_SPECS, import_groups, import_org
 from app.services.channel_import import CHANNEL_SPECS, import_channels
+from app.services.flow_rules import default_steps
+from app.services.flows import FlowDoc, complete, rebuild_body, save_picks, submit
 from app.services.spreadsheet import read_workbook
 from app.services.storage import ensure_bucket, mime_for, put_file
 
@@ -109,6 +115,61 @@ class Seeder:
                 post_id=post.id, file_name=name, storage_key=key, size=len(content), mime=mime
             )
         )
+
+
+async def seed_flows(db: Seeder, u: dict[str, User], group_id: int, expense: Channel) -> None:
+    # 워크플로우: 확정자는 명단에서, 처리자와 검토자는 등록자가 고른다.
+    request = await db.add(
+        Channel(group_id=group_id, type="flow", name="홍보물 요청", sort_order=5)
+    )
+    steps = default_steps()
+    steps[3]["assign"] = "listed"
+    flow = await db.add(
+        FlowDefinition(
+            channel_id=request.id,
+            version=1,
+            steps=steps,
+            created_by=u["sa1"].id,
+            published_by=u["sa1"].id,
+            published_at=db.now - timedelta(hours=30),
+        )
+    )
+    await db.add(FlowAssignee(channel_id=request.id, step_key="s4", user_id=u["sa1"].id))
+    await db.add(
+        FlowApprovalTarget(channel_id=request.id, target_channel_id=expense.id, is_default=True)
+    )
+    for title, body, worked in (
+        ("전시회 브로슈어 제작", "## 요청\n\n- 수량: 500부\n- 표지에 새 로고 사용", True),
+        ("채용 공고 문구 검토", "채용 공고 문구를 다듬어 주세요.", False),
+    ):
+        asked = await db.post(request, u["sa2"], "", 1)
+        asked.title = title
+        row = await db.add(
+            FlowItem(
+                post_id=asked.id,
+                definition_id=flow.id,
+                registrant_id=u["sa2"].id,
+                status="draft",
+                round=1,
+                current_step=0,
+                values={"f1": body},
+            )
+        )
+        doc = FlowDoc(asked, request, row, flow)
+        picks = {"s2": [u["sa4"].id], "s3": [u["sa3"].id], "s4": [u["sa1"].id]}
+        await save_picks(db.session, doc, picks)
+        rebuild_body(doc)
+        await submit(db.session, doc, u["sa2"])
+        if worked:
+            await complete(
+                db.session,
+                doc,
+                doc.my_task(u["sa4"].id),
+                u["sa4"],
+                values={"f3": "시안 2종을 만들었습니다."},
+                comment="",
+                finish=False,
+            )
 
 
 async def seed(session: AsyncSession) -> None:
@@ -327,6 +388,9 @@ async def seed(session: AsyncSession) -> None:
     )
     await db.add(ApprovalStep(approval_id=draft.id, step_no=1, approver_id=u["sa1"].id))
     await db.add(ApprovalStep(approval_id=draft.id, step_no=2, approver_id=u["fi1"].id))
+
+    if "flow" not in get_settings().disabled_channel_types:
+        await seed_flows(db, u, channels["영업 일반"].group_id, expense)
 
     record_audit(
         session,

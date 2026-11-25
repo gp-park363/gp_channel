@@ -430,7 +430,7 @@ button.danger { background: var(--danger); color: #fff; }
 .rail-dot[hidden] { display: none; }
 
 /* 업무 채널: 명령어 입력, 메시지 카드, 업무 화면 팝업(iframe) */
-.menu-icon.work { background: var(--accent-soft); color: var(--accent-soft-text); }
+.menu-icon.work, .menu-icon.flow { background: var(--accent-soft); color: var(--accent-soft-text); }
 .work-composer .work-input { position: relative; }
 .work-composer input[name=command] { background: none; padding: 10px; width: 100%; }
 .work-composer .composer-actions { justify-content: space-between; }
@@ -463,3 +463,55 @@ a.button.soft { background: var(--accent-soft); color: var(--accent-soft-text); 
   .modal, .work-modal { border-radius: 0; height: 100dvh; max-height: none; max-width: none; width: 100%; }
   .work-frame { height: 100dvh; }
 }
+
+/* 워크플로우: 설정 편집기, 등록·처리 화면, 목록 */
+.tag.danger { color: var(--danger); }
+.step.skipped { opacity: .55; text-decoration: line-through; }
+.flow-field { display: flex; flex-direction: column; gap: 6px; }
+.flow-field > .muted { font-size: 13px; }
+.flow-options { border: 0; display: flex; flex-direction: column; gap: 8px; margin: 0; min-width: 0; padding: 0; }
+.flow-options legend { color: var(--text-2); font-size: 14px; font-weight: 500; margin-bottom: 4px; padding: 0; }
+.stack label.check { align-items: center; flex-direction: row; }
+.flow-options input[type=file] { color: var(--text-2); font-size: 14px; max-width: 100%; }
+.flow-options input[type=file]::file-selector-button { background: var(--fill); border: 0; border-radius: 10px; color: var(--text-2); cursor: pointer; font: inherit; font-weight: 600; margin-right: 10px; min-height: 40px; padding: 0 14px; }
+.people-picker { display: flex; flex-direction: column; gap: 8px; }
+.flow-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.flow-list { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); padding: 4px 18px; }
+.flow-list:empty { display: none; }
+.flow-row { display: flex; flex-direction: column; gap: 6px; }
+.flow-row .muted { font-size: 13px; }
+.flow-row-main { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
+.flow-empty { padding: 24px 0; text-align: center; }
+.flow-pager { justify-content: center; margin-top: 12px; }
+.flow-section { border-top: 1px solid var(--fill); margin-top: 14px; padding-top: 12px; }
+.flow-section h4 { font-size: 15px; font-weight: 700; margin: 0 0 8px; }
+.flow-section h4 .muted { font-size: 13px; font-weight: 500; margin-left: 4px; }
+.flow-values { display: grid; gap: 10px 16px; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); margin: 0; }
+.flow-values .wide { grid-column: 1 / -1; }
+.flow-values dt { color: var(--text-3); font-size: 13px; font-weight: 600; }
+.flow-values dd { font-size: 15px; margin: 0; overflow-wrap: anywhere; }
+.flow-comment { font-size: 14px; margin-top: 8px; overflow-wrap: anywhere; white-space: pre-line; }
+.flow-note { background: var(--fill); border-radius: var(--radius-sm); margin-top: 8px; padding: 10px 14px; }
+.flow-note .tag { background: var(--surface); }
+.flow-note .attachments li { background: var(--surface); }
+.flow-events { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; padding-left: 18px; }
+.flow-events p { color: var(--text-2); white-space: pre-line; }
+.flow-note-check { padding: 4px 10px; }
+.flow-open { border-top: 1px solid var(--fill); padding-top: 10px; }
+.flow-open summary { cursor: pointer; }
+.flow-open form { margin-top: 10px; }
+.flow-editor-steps { display: flex; flex-direction: column; gap: 12px; list-style: none; margin: 0; padding: 0; }
+.flow-step { border: 1.5px solid var(--fill-strong); border-radius: var(--radius); display: flex; flex-direction: column; gap: 10px; padding: 14px; }
+.flow-step-head { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
+.flow-step-head input:not([type=checkbox]) { flex: 1 1 160px; min-height: 40px; min-width: 0; padding: 6px 12px; }
+.flow-step-head button, .flow-item-head button { border-radius: 8px; font-size: 13px; min-height: 32px; min-width: 32px; padding: 0 8px; }
+.flow-step select, .flow-item input, .flow-item select, .flow-item textarea { font-size: 14px; min-height: 40px; padding: 6px 12px; }
+.flow-items { display: flex; flex-direction: column; gap: 8px; list-style: none; margin: 0; padding: 0; }
+.flow-item { background: var(--fill); border-radius: var(--radius-sm); display: flex; flex-direction: column; gap: 8px; padding: 10px; }
+.flow-item input:not([type=checkbox]):not([type=radio]):not([type=file]), .flow-item select, .flow-item textarea { background: var(--surface); }
+.flow-item-head { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
+.flow-item-head input:not([type=checkbox]) { flex: 1 1 140px; min-width: 0; }
+.flow-item-head button { background: var(--surface); }
+.flow-item-more { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+.flow-item-more .wide { grid-column: 1 / -1; }
+.flow-warning { color: var(--danger); font-size: 13px; }

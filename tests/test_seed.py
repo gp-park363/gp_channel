@@ -2,7 +2,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.cli import reset_refusal
-from app.core.config import Settings
+from app.core.config import Settings, get_settings
 from app.core.db import SessionLocal
 from app.models import (
     Attachment,
@@ -53,7 +53,7 @@ def sign_in(login: str) -> Browser:
 def test_seed_builds_every_group_with_a_manager() -> None:
     apply_seed()
     assert count(WorkspaceGroup) == 3 and count(GroupManager) == 3
-    assert count(User) == 10 and count(Channel) == 12
+    assert count(User) == 10 and count(Channel) == 13
     assert count(PermissionGrant) == 17
     assert count(Post) > 15 and count(Attachment) == 2
 
@@ -161,3 +161,11 @@ def test_seed_work_channel_calls_sample_todo() -> None:
     url = "http://127.0.0.1:8100/todos"
     assert run(load()) == ("work", {("add", "todo", "index", url), ("find", "todo", "find", url)})
     assert access("sa2", "할 일").write
+
+
+def test_seed_works_while_types_are_disabled(monkeypatch) -> None:
+    """샘플 데이터는 중지한 업무 채널도 만들어 둔다. 워크플로우 샘플은 켜져 있을 때만 넣는다."""
+    monkeypatch.setattr(get_settings(), "disabled_channel_types", frozenset({"work", "flow"}))
+    apply_seed()
+    assert count(Channel) == 12
+    assert not access("sa1", "할 일").can_enter

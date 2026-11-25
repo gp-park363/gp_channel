@@ -1,0 +1,11 @@
+{% from "partials/flow_chips.html" import flow_chips %}
+<li id="flow-row-{{ row.post_id }}" class="flow-row" sse-swap="row-{{ row.post_id }}" hx-swap="outerHTML" hx-target="this">
+  <div class="flow-row-main">
+    <a class="list-link" href="/flows/{{ row.post_id }}">{{ row.title }}</a>
+    <span class="tag{% if row.item.status in ('in_progress', 'returned') %} blue{% endif %}">{{ row.status_label }}</span>
+    {% if row.note_count %}<span class="tag">추가 내용 {{ row.note_count }}</span>{% endif %}
+    {% if row.approval %}<span class="tag">결재 # {{ row.approval.channel_name }}: {{ row.approval.status_label }}</span>{% endif %}
+  </div>
+  {{ flow_chips(row.chips, compact=true) }}
+  <p class="muted">{% if row.people %}담당 {{ row.people|join(", ") }} · {% endif %}등록 {{ row.registrant }}{% if row.item.submitted_at %} · {{ row.item.submitted_at|time }}{% endif %}</p>
+</li>

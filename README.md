@@ -4,6 +4,7 @@
 
 - 기획서: [barochannel.md](barochannel.md)
 - 업무 채널 기획: [work_channel.md](work_channel.md)
+- 워크플로우 채널 기획: [workflow_channel.md](workflow_channel.md)
 - 업무 연동 개발 가이드: [work_integration_guide.md](work_integration_guide.md)
 - 개발 일정: [project_plan.md](project_plan.md)
 
@@ -89,7 +90,13 @@ deploy/restore.sh backups/20261117-0954  # 현재 데이터를 지우고 복원 
   (`docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt caddy-root.crt`).
 - IP 인증서는 Caddy가 자동으로 갱신한다.
 
+## 채널 유형 사용 중지
+
+`BARO_DISABLED_CHANNEL_TYPES`에 적은 유형(`work` 업무, `flow` 워크플로우)은 새로 만들 수 없고 있던 채널도 열리지 않는다. 데이터는 남는다. 줄이 없으면 업무 채널을 중지한다. 모두 켜려면 빈 값으로 두고(`BARO_DISABLED_CHANNEL_TYPES=`) 서버를 다시 시작한다.
+
 ## 샘플 할 일 시스템
+
+업무 채널은 지금 사용 중지 상태다. 이 샘플을 쓰려면 위 설정에서 `work`를 뺀다.
 
 업무 채널의 외부 연동을 확인하는 별도 서버다. 바로채널 전용 규격 없이 평범한 JSON API이고, 화면은 `src/app/templates/works/todo`에 있다([work_channel.md](work_channel.md)). 바로채널과 다른 터미널에서 띄운다.
 

@@ -1,0 +1,16 @@
+<nav class="flow-tabs" aria-label="걸러 보기">
+  {% for key, label, count in listing.tabs %}
+  <button type="button" class="chip{% if key == listing.tab %} mine{% endif %}"{% if key == listing.tab %} aria-current="true"{% endif %} hx-get="/channels/{{ channel.id }}/flows?tab={{ key }}" hx-target="#flow-box" hx-swap="innerHTML">{{ label }} {{ count }}</button>
+  {% endfor %}
+</nav>
+<ul class="list flow-list" id="flow-list" data-url="/channels/{{ channel.id }}/flows?tab={{ listing.tab }}&amp;page={{ listing.page }}"{% if listing.tab in ("all", "open") and listing.page == 1 %} sse-swap="ch-{{ channel.id }}" hx-swap="afterbegin"{% endif %}>
+  {% for row in listing.rows %}{% include "partials/flow_row.html" %}{% endfor %}
+</ul>
+{% if not listing.rows %}<p class="muted flow-empty">{{ "해당하는 건이 없습니다." if listing.ready else "아직 준비 중인 채널입니다." }}</p>{% endif %}
+{% if listing.pages > 1 %}
+<div class="row flow-pager">
+  {% if listing.page > 1 %}<button type="button" hx-get="/channels/{{ channel.id }}/flows?tab={{ listing.tab }}&amp;page={{ listing.page - 1 }}" hx-target="#flow-box" hx-swap="innerHTML">이전</button>{% endif %}
+  <span class="muted">{{ listing.page }} / {{ listing.pages }}</span>
+  {% if listing.page < listing.pages %}<button type="button" hx-get="/channels/{{ channel.id }}/flows?tab={{ listing.tab }}&amp;page={{ listing.page + 1 }}" hx-target="#flow-box" hx-swap="innerHTML">다음</button>{% endif %}
+</div>
+{% endif %}

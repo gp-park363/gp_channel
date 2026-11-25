@@ -14,6 +14,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.db import SessionDep
 from app.core.deps import AuthzDep, CurrentUser, current_user
 from app.core.security import csrf_token
@@ -395,6 +396,8 @@ async def receive_event(command_id: int, request: Request, session: SessionDep) 
         return rejected()
     if command.archived_at is not None:
         return JSONResponse({"detail": "보관된 명령어입니다."}, status.HTTP_409_CONFLICT)
+    if "work" in get_settings().disabled_channel_types:
+        return JSONResponse({"detail": "사용을 중지한 채널입니다."}, status.HTTP_409_CONFLICT)
     event_id = request.headers.get("X-Baro-Event-Id", "")
     if not EVENT_ID.match(event_id):
         return JSONResponse(

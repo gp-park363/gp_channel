@@ -35,6 +35,7 @@ from app.models import (
     User,
 )
 from app.services.audit import record_audit
+from app.services.flows import add_note, load_doc, participants
 from app.services.mentions import MentionError, sync_mentions
 from app.services.navigation import build_navigation
 from app.services.permissions import (
@@ -43,6 +44,7 @@ from app.services.permissions import (
     access_for_users,
     can_view_replies,
     can_write_reply,
+    document_users,
 )
 from app.services.post_views import EMOJIS, build_views, can_view_any, pinned_views, timeline_posts
 from app.services.realtime import Event, publish, publish_counts
@@ -96,7 +98,9 @@ def check_upload_size(request: Request) -> None:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "첨부 용량이 너무 큽니다.")
 
 
-async def store_attachments(session: AsyncSession, post: Post, files: list[UploadFile]) -> None:
+async def store_attachments(
+    session: AsyncSession, post: Post, files: list[UploadFile]
+) -> list[Attachment]:
     settings = get_settings()
     uploads = [file for file in files if file.filename]
     if len(uploads) > settings.max_files_per_post:
@@ -118,14 +122,16 @@ async def store_attachments(session: AsyncSession, post: Post, files: list[Uploa
                 f"파일은 {settings.max_upload_mb}MB까지 가능합니다: {name}",
             )
         checked.append((file, name, mime))
+    stored = []
     for file, name, mime in checked:
         key = f"attachments/{uuid4().hex}"
         await put_file(key, file.file, mime)
-        session.add(
-            Attachment(
-                post_id=post.id, file_name=name, storage_key=key, size=file.size or 0, mime=mime
-            )
+        row = Attachment(
+            post_id=post.id, file_name=name, storage_key=key, size=file.size or 0, mime=mime
         )
+        session.add(row)
+        stored.append(row)
+    return stored
 
 
 async def apply_mentions(
@@ -226,7 +232,12 @@ async def thread(post_id: int, session: SessionDep, authz: AuthzDep) -> HTMLResp
     dependencies=[Depends(check_upload_size)],
 )
 async def create_reply(
-    post_id: int, session: SessionDep, authz: AuthzDep, body: Body = "", files: Files = None
+    post_id: int,
+    session: SessionDep,
+    authz: AuthzDep,
+    body: Body = "",
+    files: Files = None,
+    flow_note: Annotated[bool, Form()] = False,
 ) -> HTMLResponse:
     files = files or []
     # 글 삭제와 답글 작성이 겹쳐도 F-18이 깨지지 않도록 부모 행을 잠근다.
@@ -238,6 +249,13 @@ async def create_reply(
     if post.deleted_at is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "삭제된 글에는 답글을 쓸 수 없습니다.")
     require_content(body, files)
+    flow = await load_doc(session, post, channel) if channel.type == "flow" else None
+    if flow is not None and post.is_draft:
+        raise HTTPException(status.HTTP_409_CONFLICT, "제출한 뒤에 쓰레드를 쓸 수 있습니다.")
+    if flow_note and (flow is None or authz.user.id not in await participants(session, flow)):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "추가 내용은 등록자와 담당자만 남길 수 있습니다."
+        )
     reply = Post(
         channel_id=channel.id, parent_post_id=post.id, author_id=authz.user.id, body_md=body
     )
@@ -245,6 +263,8 @@ async def create_reply(
     await session.flush()
     await apply_mentions(session, reply, post, channel)
     await store_attachments(session, reply, files)
+    if flow_note:
+        add_note(session, flow, reply, authz.user)
     await publish(session, Event("created", channel.id, reply.id, authz.user.id))
     await session.commit()
     return await card(session, authz, reply, post, channel, access)
@@ -260,6 +280,8 @@ async def post_page(
         return RedirectResponse(f"/posts/{parent.id}#post-{post.id}", status.HTTP_303_SEE_OTHER)
     if channel.type == "approval":
         return RedirectResponse(f"/approvals/{post.id}", status.HTTP_303_SEE_OTHER)
+    if channel.type == "flow":
+        return RedirectResponse(f"/flows/{post.id}", status.HTTP_303_SEE_OTHER)
     (view,) = await build_views(session, [post], authz, channel, access)
     return templates.TemplateResponse(
         request,
@@ -418,9 +440,20 @@ async def mention_candidates(
     session: SessionDep,
     authz: AuthzDep,
     q: Annotated[str, Query(max_length=100)] = "",
+    post: Annotated[int | None, Query()] = None,
 ) -> list[dict[str, object]]:
-    """F-20 자동완성. 읽기 권한이 없는 사람은 고를 수 없게 표시한다(F-25)."""
-    channel, _ = await channel_access(session, authz, channel_id)
+    """F-20 자동완성. 읽기 권한이 없는 사람은 고를 수 없게 표시한다(F-25).
+
+    쓰레드에서는 글 번호를 받아 그 글만 볼 수 있는 사람(검토자, 담당자 등)도 고르게 한다.
+    """
+    viewers: set[int] = set()
+    if post is None:
+        channel, _ = await channel_access(session, authz, channel_id)
+    else:
+        root, _, channel, _ = await post_context(session, authz, post)
+        if channel.id != channel_id:
+            raise not_found()
+        viewers = await document_users(session, channel, root.id)
     users = list(
         await session.scalars(
             select(User)
@@ -471,7 +504,7 @@ async def mention_candidates(
                 "label": row.name,
                 "detail": row.email,
                 "insert": insert_text(row),
-                "disabled": not access[row.id].read,
+                "disabled": not (access[row.id].read or row.id in viewers),
             }
             for row in users
         ],
@@ -553,7 +586,8 @@ async def toggle_reaction(
 @router.post("/posts/{post_id}/pin", response_class=HTMLResponse)
 async def toggle_pin(post_id: int, session: SessionDep, authz: AuthzDep) -> HTMLResponse:
     post, parent, channel, access = await post_context(session, authz, post_id)
-    if parent is not None or channel.type == "approval" or post.deleted_at is not None:
+    unpinnable = channel.type in ("approval", "flow")
+    if parent is not None or unpinnable or post.deleted_at is not None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "고정할 수 없는 글입니다.")
     if not await authz.is_manager(channel):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "채널 관리자만 고정할 수 있습니다.")

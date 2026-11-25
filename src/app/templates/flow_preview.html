@@ -1,0 +1,24 @@
+{% extends "page.html" %}
+{% from "partials/icons.html" import icon %}
+{% from "partials/flow_fields.html" import flow_fields %}
+{% block title %}{{ channel.name }} 미리보기 · 바로채널{% endblock %}
+{% block content %}
+<a class="back" href="/channels/{{ channel.id }}/flow">{{ icon("back") }}워크플로우 설정</a>
+<h1>{{ channel.name }} 미리보기</h1>
+<p class="muted">저장한 초안의 단계별 화면입니다. 여기서 입력한 값은 저장되지 않습니다.</p>
+{% for step, inputs, names in steps %}
+<section class="section stack">
+  <h2>{{ loop.index }}. {{ step.label }} <span class="muted">{{ STEP_KINDS[step.kind] }}</span></h2>
+  {% if step.kind != "register" %}<p class="muted">{{ ASSIGN_KINDS[step.assign] }}{% if names and step.assign != "registrant" %}: {{ names|join(", ") }}{% endif %} · {{ COMPLETE_KINDS[step.complete] }} 완료</p>{% endif %}
+  {% if step.kind == "register" %}<label><span>제목 <b class="required">필수</b></span> <input maxlength="200"></label>{% set inputs = inputs|rejectattr("spec.key", "equalto", "title")|list %}{% endif %}
+  {{ flow_fields(inputs, people_url) }}
+  <div class="row">
+    {% if step.kind == "register" %}<button type="button" disabled>임시저장</button><button type="button" class="primary" disabled>제출</button>
+    {% elif step.kind == "process" %}<button type="button" class="primary" disabled>처리 완료</button><button type="button" disabled>보완 요청</button>
+    {% elif step.kind == "review" %}<button type="button" class="primary" disabled>검토 완료</button><button type="button" disabled>보완 요청</button>
+    {% elif loop.last %}<button type="button" class="primary" disabled>확정</button><button type="button" disabled>보완 요청</button><button type="button" disabled>반려</button>
+    {% else %}<button type="button" class="primary" disabled>확정하고 다음 단계로</button><button type="button" disabled>확정하고 마무리</button><button type="button" disabled>보완 요청</button><button type="button" disabled>반려</button>{% endif %}
+  </div>
+</section>
+{% endfor %}
+{% endblock %}

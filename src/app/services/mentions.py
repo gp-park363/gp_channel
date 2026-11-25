@@ -9,7 +9,12 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Channel, Department, MentionAck, Post, User, UserDepartment
-from app.services.permissions import Authorizer, ChannelAccess, access_for_users
+from app.services.permissions import (
+    Authorizer,
+    ChannelAccess,
+    access_for_users,
+    document_users,
+)
 from app.services.post_views import can_view_any
 
 MENTION_START = re.compile(r"(?<![\w.@])@")
@@ -100,6 +105,9 @@ async def sync_mentions(
     members = await _department_members(session, found.departments)
     everyone = found.users | {user_id for group in members.values() for user_id in group}
     access = await access_for_users(session, channel, everyone)
+    # 결재 검토자나 워크플로우 담당자처럼 그 글만 볼 수 있는 사람도 멘션한다.
+    for user_id in everyone & await document_users(session, channel, (parent or post).id):
+        access[user_id] = ChannelAccess(True, access[user_id].write, True, True)
 
     def can_view(user_id: int) -> bool:
         return can_view_any(access[user_id], post, parent, user_id)
@@ -163,7 +171,7 @@ async def pending_acks(session: AsyncSession, authz: Authorizer) -> list[Pending
     for post in posts:
         channel = await session.get(Channel, post.channel_id)
         parent = await session.get(Post, post.parent_post_id) if post.parent_post_id else None
-        access = await authz.access(channel)
+        access = await authz.post_access(channel, post, parent)
         if can_view_any(access, post, parent, authz.user.id):
             pending.append(PendingAck(post, parent, channel, access))
     return pending

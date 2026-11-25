@@ -28,6 +28,8 @@
         <li class="muted">아직 문서가 없습니다.</li>
         {% endfor %}
       </ul>
+      {% elif channel.type == "flow" %}
+      <div id="flow-box">{% include "partials/flow_list.html" %}</div>
       {% else %}
       <div id="timeline" sse-swap="ch-{{ channel.id }}" hx-swap="beforeend">
         {% include "partials/post_page.html" %}
@@ -53,6 +55,8 @@
     <p class="notice"><a class="button primary" href="/channels/{{ channel.id }}/docs/new">새 문서</a></p>
     {% elif access.write and channel.type == "vote" %}
     <p class="notice"><a class="button primary" href="/channels/{{ channel.id }}/polls/new">새 투표</a></p>
+    {% elif access.write and channel.type == "flow" %}
+    {% if listing.ready %}<p class="notice"><a class="button primary" href="/channels/{{ channel.id }}/flows/new">새 등록</a></p>{% else %}<p class="notice">아직 준비 중인 채널입니다.{% if is_manager %} <a href="/channels/{{ channel.id }}/flow">워크플로우 설정</a>에서 발행해 주세요.{% endif %}</p>{% endif %}
     {% elif access.write and channel.type == "approval" %}
     <p class="notice"><a class="button primary" href="/channels/{{ channel.id }}/approvals/new">새 결재</a></p>
     {% elif access.write and channel.type != "talk" %}

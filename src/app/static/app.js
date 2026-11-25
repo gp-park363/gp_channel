@@ -31,6 +31,8 @@
     if (document.getElementById("timeline") && !document.querySelector("#timeline form.card")) {
       htmx.ajax("GET", `/channels/${channelId}/posts`, { target: "#timeline", swap: "innerHTML" });
     }
+    const flows = document.getElementById("flow-list");
+    if (flows) htmx.ajax("GET", flows.dataset.url, { target: "#flow-box", swap: "innerHTML" });
     if (document.getElementById("pinned")) {
       htmx.ajax("GET", `/channels/${channelId}/pins`, { target: "#pinned", swap: "innerHTML" });
     }
@@ -111,9 +113,9 @@
 
   // 다시 연결하는 사이에 같은 글이 두 번 들어오지 않게 한다.
   document.body.addEventListener("htmx:sseBeforeMessage", (event) => {
-    const found = /id="post-(\d+)"/.exec(event.detail.data);
+    const found = /id="((?:post|flow-row)-\d+)"/.exec(event.detail.data);
     const appends = /^(ch|thread)-/.test(event.detail.type);
-    if (appends && found && document.getElementById(`post-${found[1]}`)) event.preventDefault();
+    if (appends && found && document.getElementById(found[1])) event.preventDefault();
   });
 
   // 작성 응답이 SSE보다 늦게 오면 같은 글을 또 넣지 않는다.
@@ -396,6 +398,10 @@
     addFiles(input, files.filter(generic), "캡처");
   });
 
+  function withQuery(url, query) {
+    return `${url}${url.includes("?") ? "&" : "?"}q=${encodeURIComponent(query)}`;
+  }
+
   function csrfHeaders() {
     try {
       return JSON.parse(document.body.getAttribute("hx-headers") || "{}");
@@ -506,7 +512,7 @@
     }
 
     async function load(url, query, current) {
-      const response = await fetch(`${url}?q=${encodeURIComponent(query)}`);
+      const response = await fetch(withQuery(url, query));
       if (response.ok && current === serial) show(await response.json());
     }
 
@@ -623,7 +629,7 @@
     async function find() {
       serial += 1;
       const current = serial;
-      const response = await fetch(`${url}?q=${encodeURIComponent(input.value.trim())}`);
+      const response = await fetch(withQuery(url, input.value.trim()));
       if (response.ok && current === serial) show(await response.json());
     }
 
@@ -786,6 +792,68 @@
     planner.querySelector(".js-reset-line").addEventListener("click", () => loadDefault("등록 승인선으로 되돌렸습니다."));
     if (select) select.addEventListener("change", () => loadDefault("기안 소속을 바꿔 그 소속의 등록 승인선으로 다시 채웠습니다."));
   }
+
+  // 워크플로우의 사람 고르기. 고른 순서대로 숨은 칸에 번호를 싣는다. 한 명만 고르는 칸은 새로 고르면 바뀐다.
+  function setupPeoplePicker(picker) {
+    const list = picker.querySelector(".line-steps");
+    const inputs = picker.querySelector(".picker-inputs");
+    const max = Number(picker.dataset.max) || 20;
+    let people = JSON.parse(picker.dataset.people);
+
+    function render() {
+      list.replaceChildren(...people.map((row, index) => {
+        const item = document.createElement("li");
+        item.append(...personText(row), spacer(),
+          iconButton("빼기", `${row.name} 빼기`, false, () => { people.splice(index, 1); render(); }));
+        return item;
+      }));
+      inputs.replaceChildren(...people.map((row) => {
+        const input = document.createElement("input");
+        input.type = "hidden";
+        input.name = picker.dataset.name;
+        input.value = row.id;
+        return input;
+      }));
+    }
+
+    attachPeopleSearch(picker.querySelector(".line-search"), picker.dataset.url, () => people, (row) => {
+      if (max === 1) people = [row];
+      else if (people.length < max) people.push(row);
+      else showToast(`${max}명까지 고를 수 있습니다.`);
+      render();
+    });
+    render();
+  }
+
+  // 워크플로우 설정 편집기(flow-editor.js)도 같은 사람 검색을 쓴다.
+  window.baroPeople = { attachPeopleSearch, personText, iconButton, spacer };
+
+  document.addEventListener("DOMContentLoaded", () => {
+    document.querySelectorAll(".people-picker[data-url]").forEach(setupPeoplePicker);
+  });
+
+  // 화면을 연 뒤 추가 내용이 올라왔으면 서버가 한 번 막는다. 확인한 것으로 바꿔 두면 다시 눌러 진행한다.
+  document.body.addEventListener("flow-seen", (event) => {
+    document.querySelectorAll("#flow-action input[name=seen]").forEach((input) => { input.value = event.detail.seen; });
+  });
+
+  document.body.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-confirm]");
+    if (button && !confirm(button.dataset.confirm)) event.preventDefault();
+  });
+
+  // 건 화면의 추가 내용을 누르면 쓰레드의 그 답글로 간다.
+  document.body.addEventListener("click", (event) => {
+    const link = event.target.closest("a[data-note]");
+    if (!link) return;
+    const reply = document.querySelector(`#thread #post-${link.dataset.note}`);
+    const auto = document.querySelector("[data-auto-thread]");
+    if (!reply && !auto) return;
+    event.preventDefault();
+    history.replaceState(null, "", `#post-${link.dataset.note}`);
+    if (reply) reply.scrollIntoView({ block: "center", behavior: "smooth" });
+    else htmx.ajax("GET", auto.dataset.autoThread, { target: "#thread", swap: "innerHTML" });
+  });
 
   document.addEventListener("DOMContentLoaded", setupTodoCount);
   document.addEventListener("DOMContentLoaded", setupMentions);

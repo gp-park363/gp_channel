@@ -31,24 +31,31 @@ from app.services.storage import copy_file
 
 
 async def copy_attachments(session: AsyncSession, source_post_id: int, target_post_id: int) -> None:
-    """글마다 파일을 따로 둔다. 한쪽을 지워도 다른 쪽의 보존에 영향이 없다."""
     rows = await session.scalars(
         select(Attachment).where(
             Attachment.post_id == source_post_id, Attachment.deleted_at.is_(None)
         )
     )
-    for row in list(rows):
+    await copy_files(session, list(rows), target_post_id)
+
+
+async def copy_files(
+    session: AsyncSession, rows: Sequence[Attachment], target_post_id: int
+) -> dict[int, Attachment]:
+    """글마다 파일을 따로 둔다. 한쪽을 지워도 다른 쪽의 보존에 영향이 없다."""
+    copies: dict[int, Attachment] = {}
+    for row in rows:
         key = f"attachments/{uuid4().hex}"
         await copy_file(row.storage_key, key)
-        session.add(
-            Attachment(
-                post_id=target_post_id,
-                file_name=row.file_name,
-                storage_key=key,
-                size=row.size,
-                mime=row.mime,
-            )
+        copies[row.id] = Attachment(
+            post_id=target_post_id,
+            file_name=row.file_name,
+            storage_key=key,
+            size=row.size,
+            mime=row.mime,
         )
+    session.add_all(copies.values())
+    return copies
 
 
 async def document_body(

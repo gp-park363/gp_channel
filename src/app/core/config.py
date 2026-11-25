@@ -11,6 +11,10 @@ DEFAULT_EXTENSIONS = frozenset(
 )
 
 
+# 사용을 중지할 수 있는 채널 유형.
+OPTIONAL_CHANNEL_TYPES = frozenset({"work", "flow"})
+
+
 class Settings(BaseSettings):
     """환경 차이는 코드가 아니라 BARO_ 환경 변수나 .env 파일로 분리한다."""
 
@@ -60,6 +64,10 @@ class Settings(BaseSettings):
     integration_allowed_hosts: Annotated[frozenset[str], NoDecode] = frozenset()
     integration_timeout_seconds: float = Field(default=5, gt=0, le=30)
 
+    # 사용을 중지한 채널 유형. 쉼표로 구분한다(work, flow). 새로 만들 수 없고 있던 채널은 닫힌다.
+    # 데이터는 그대로 남으므로 빼면 다시 열린다. 업무 채널은 2026-11-25부터 중지해 둔다.
+    disabled_channel_types: Annotated[frozenset[str], NoDecode] = frozenset({"work"})
+
     @field_validator("admin_email")
     @classmethod
     def normalize_admin_email(cls, value: str) -> str:
@@ -78,6 +86,17 @@ class Settings(BaseSettings):
         if not isinstance(value, str):
             return value
         return frozenset(item.strip().lower() for item in value.split(",")) - {""}
+
+    @field_validator("disabled_channel_types", mode="before")
+    @classmethod
+    def parse_disabled_types(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        items = frozenset(item.strip().lower() for item in value.split(",")) - {""}
+        if not items <= OPTIONAL_CHANNEL_TYPES:
+            names = ", ".join(sorted(OPTIONAL_CHANNEL_TYPES))
+            raise ValueError(f"BARO_DISABLED_CHANNEL_TYPES에는 {names}만 쓸 수 있습니다.")
+        return items
 
     @field_validator("allowed_extensions", mode="before")
     @classmethod

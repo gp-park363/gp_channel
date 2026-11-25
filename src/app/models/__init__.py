@@ -17,6 +17,17 @@ from app.models.content import (
     PostRevision,
     Reaction,
 )
+from app.models.flow import (
+    FlowApproval,
+    FlowApprovalTarget,
+    FlowAssignee,
+    FlowDefinition,
+    FlowItem,
+    FlowPick,
+    FlowReply,
+    FlowSubmission,
+    FlowTask,
+)
 from app.models.org import Department, User, UserDepartment
 from app.models.poll import Poll, PollOption, PollVote, PollVoteHistory
 from app.models.space import (
@@ -43,6 +54,15 @@ __all__ = [
     "Channel",
     "ChannelRead",
     "Department",
+    "FlowApproval",
+    "FlowApprovalTarget",
+    "FlowAssignee",
+    "FlowDefinition",
+    "FlowItem",
+    "FlowPick",
+    "FlowReply",
+    "FlowSubmission",
+    "FlowTask",
     "GroupManager",
     "MentionAck",
     "PermissionGrant",

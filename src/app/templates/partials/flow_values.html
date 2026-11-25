@@ -1,0 +1,29 @@
+{% macro flow_values(section) %}
+<section class="flow-section">
+  <h4>{{ section.title }} <span class="muted">{{ section.by }}{% if section.at %} · {{ section.at|time }}{% endif %}</span></h4>
+  {% if section["values"] %}
+  <dl class="flow-values">
+    {% for value in section["values"] %}
+    <div{% if value.kind in ("markdown", "file") %} class="wide"{% endif %}>
+      <dt>{{ value.label }}</dt>
+      {% if value.kind == "markdown" %}<dd class="body">{{ value.html|safe }}</dd>
+      {% elif value.kind == "file" %}<dd>{{ flow_files(value.files) }}</dd>
+      {% else %}<dd>{{ value.text }}</dd>{% endif %}
+    </div>
+    {% endfor %}
+  </dl>
+  {% endif %}
+  {% if section.comment %}<p class="flow-comment"><span class="muted">의견</span> {{ section.comment }}</p>{% endif %}
+</section>
+{% endmacro %}
+{% macro flow_files(files) %}
+<ul class="attachments">
+  {% for file in files %}
+  <li>
+    {% if file.is_image %}<a href="/attachments/{{ file.id }}" target="_blank" rel="noopener"><img src="/attachments/{{ file.id }}" alt="{{ file.file_name }}" loading="lazy"></a>{% endif %}
+    <a href="/attachments/{{ file.id }}?download=true">{{ file.file_name }}</a>
+    <span class="muted">{{ file.size|filesize }}</span>
+  </li>
+  {% endfor %}
+</ul>
+{% endmacro %}

@@ -20,7 +20,6 @@ from app.core.db import SessionDep
 from app.core.deps import CurrentUser, current_user
 from app.core.templating import fragment, templates
 from app.models import (
-    CHANNEL_TYPES,
     Channel,
     ChannelDispatchTarget,
     Department,
@@ -40,7 +39,13 @@ from app.services.channel_import import (
     export_channels,
     managed_group_ids,
 )
-from app.services.permissions import PERMISSIONS, normalize_grant
+from app.services.flows import start_draft
+from app.services.permissions import (
+    PERMISSIONS,
+    available_types,
+    is_disabled,
+    normalize_grant,
+)
 from app.services.spreadsheet import MAX_FILE_BYTES
 from app.services.work import screens
 
@@ -67,6 +72,8 @@ async def managed_channel(session: AsyncSession, channel_id: int, user: User) ->
     if channel is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "채널을 찾을 수 없습니다.")
     await managed_group(session, channel.group_id, user)
+    if is_disabled(channel):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "사용을 중지한 채널 유형입니다.")
     return channel
 
 
@@ -175,7 +182,8 @@ async def group_settings(
             "user": user,
             "active_tab": "more",
             "group": group,
-            "channels": list(channels),
+            "channels": [channel for channel in channels if not is_disabled(channel)],
+            "channel_types": available_types(),
             **await grant_context(session, "group", group.id),
         },
     )
@@ -190,7 +198,7 @@ async def create_channel(
     channel_type: Annotated[str, Form(alias="type")],
 ) -> Response:
     group = await managed_group(session, group_id, user)
-    if channel_type not in CHANNEL_TYPES:
+    if channel_type not in available_types():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "채널 유형이 맞지 않습니다.")
     last = await session.scalar(
         select(func.coalesce(func.max(Channel.sort_order), 0)).where(Channel.group_id == group.id)
@@ -200,6 +208,8 @@ async def create_channel(
     )
     session.add(channel)
     await session.flush()
+    if channel.type == "flow":
+        start_draft(session, channel, user)
     record_audit(
         session,
         actor_id=user.id,
@@ -210,6 +220,8 @@ async def create_channel(
         type=channel_type,
     )
     await session.commit()
+    if channel.type == "flow":
+        return Response(headers={"HX-Redirect": f"/channels/{channel.id}/flow"})
     return Response(headers=REFRESH)
 
 

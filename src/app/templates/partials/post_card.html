@@ -8,10 +8,12 @@
     {% if v.post.edited_at %}<span class="muted">수정됨</span>{% endif %}
     {% if v.post.pinned_at %}<span class="tag blue">고정</span>{% endif %}
     {% if v.approval %}<span class="tag blue">{{ v.approval.status_label }}</span>{% endif %}
+    {% if v.flow %}<span class="tag blue">{{ v.flow.status_label }}</span>{% endif %}
+    {% if v.note %}<span class="tag blue">추가 내용</span> <span class="muted">{{ v.note }}</span>{% endif %}
   </header>
-  {% if v.post.title and not v.is_reply and not v.work %}<h3 class="approval-title"><a href="/posts/{{ v.post.id }}">{{ v.post.title }}</a></h3>{% endif %}
+  {% if v.flow %}<h3 class="approval-title"><a href="/flows/{{ v.post.id }}">{{ v.post.title }}</a></h3>{% elif v.post.title and not v.is_reply and not v.work %}<h3 class="approval-title"><a href="/posts/{{ v.post.id }}">{{ v.post.title }}</a></h3>{% endif %}
   {% if v.approval %}<h3 class="approval-title"><a href="/approvals/{{ v.post.id }}">{{ v.approval.approval.title }}</a></h3>{% endif %}
-  {% if v.work %}{% include "partials/work_block.html" %}{% else %}<div class="body">{{ v.body_html|safe }}</div>{% endif %}
+  {% if v.work %}{% include "partials/work_block.html" %}{% elif v.flow %}{% include "partials/flow_block.html" %}{% else %}<div class="body">{{ v.body_html|safe }}</div>{% endif %}
   {% include "partials/attachment_list.html" %}
   {% if v.approval %}{% include "partials/approval_block.html" %}{% endif %}
   {% if v.poll %}{% include "partials/poll_block.html" %}{% endif %}

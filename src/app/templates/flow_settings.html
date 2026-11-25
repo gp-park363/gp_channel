@@ -1,0 +1,90 @@
+{% extends "page.html" %}
+{% from "partials/icons.html" import icon %}
+{% from "partials/flow_fields.html" import people_picker %}
+{% block title %}{{ channel.name }} 워크플로우 설정 · 바로채널{% endblock %}
+{% block content %}
+<a class="back" href="/channels/{{ channel.id }}/settings">{{ icon("back") }}{{ channel.name }} 설정</a>
+<h1>워크플로우 설정 {% if published %}<span class="tag blue">{{ published.version }}판 사용 중</span>{% else %}<span class="tag">발행 전</span>{% endif %}{% if draft and published %} <span class="tag">고치는 중인 초안 있음</span>{% endif %}</h1>
+<form class="section stack" id="flow-editor" data-people="/channels/{{ channel.id }}/flow/staff">
+  <h2>단계와 입력 항목</h2>
+  <p class="muted">등록이 맨 처음, 확정이 맨 마지막입니다. 중간에 처리·검토·확정을 더합니다. 단계와 항목은 발행한 뒤 새로 제출하는 건부터 적용되고, 담당자와 명단은 저장하면 바로 적용됩니다.</p>
+  <script type="application/json" id="flow-data">{{ editor|tojson }}</script>
+  <input type="hidden" name="data">
+  <ol class="flow-editor-steps"></ol>
+  <div class="row flow-add-step" aria-label="중간 단계 추가">
+    <span class="muted">중간 단계 추가</span>
+    <button type="button" data-add-step="process">처리</button>
+    <button type="button" data-add-step="review">검토</button>
+    <button type="button" data-add-step="confirm">확정</button>
+  </div>
+  <div class="row">
+    <button type="button" hx-post="/channels/{{ channel.id }}/flow/draft" hx-include="#flow-editor" hx-swap="none">{{ "저장" if published and not draft else "초안 저장" }}</button>
+    <a class="button" href="/channels/{{ channel.id }}/flow/preview">저장한 내용 미리보기</a>
+    <button type="button" class="primary" hx-post="/channels/{{ channel.id }}/flow/publish" hx-include="#flow-editor" hx-swap="none" hx-confirm="발행할까요? 새로 제출하는 건부터 적용됩니다.">발행</button>
+  </div>
+</form>
+{% if old_steps %}
+<section class="section stack">
+  <h2>이전 판 단계</h2>
+  <p class="muted">고치는 중인 내용에는 없지만, 지금 쓰는 판이나 진행 중인 건이 쓰는 단계의 담당자입니다.</p>
+  {% for step in old_steps %}
+  <form class="stack" hx-post="/channels/{{ channel.id }}/flow/assignees">
+    <input type="hidden" name="step_key" value="{{ step.key }}">
+    <strong>{{ step.label }}</strong>
+    {{ people_picker("people", "/channels/%d/flow/staff" % channel.id, step.people, max_people) }}
+    <div class="row"><button>저장</button></div>
+  </form>
+  {% endfor %}
+</section>
+{% endif %}
+<section class="section stack">
+  <h2>결재 연계</h2>
+  <p class="muted">최종 확정된 건을 올릴 수 있는 결재 채널입니다. 지정하지 않으면 결재 올리기가 나오지 않습니다. 등록자·처리자·검토자·확정자 중 그 결재 채널의 쓰기 권한이 있는 사람이 올립니다.</p>
+  {% if targets %}
+  <ul class="list">
+    {% for row, default in targets %}
+    <li class="row">
+      <strong># {{ row.name }}</strong>{% if default %} <span class="tag blue">기본</span>{% endif %}
+      <span class="spacer"></span>
+      {% if not default %}<button class="link" hx-post="/channels/{{ channel.id }}/flow/approval-targets" hx-vals='{{ {"target_channel_id": row.id, "is_default": "true"}|tojson }}'>기본으로</button>{% endif %}
+      <button class="link" hx-post="/channels/{{ channel.id }}/flow/approval-targets" hx-vals='{{ {"target_channel_id": row.id, "remove": "true"}|tojson }}'>빼기</button>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if target_choices %}
+  <form class="row wrap" hx-post="/channels/{{ channel.id }}/flow/approval-targets">
+    <select name="target_channel_id" aria-label="결재 채널">
+      {% for row, group_name in target_choices %}<option value="{{ row.id }}">{{ group_name }} · # {{ row.name }}</option>{% endfor %}
+    </select>
+    <button>추가</button>
+  </form>
+  {% elif not targets %}<p class="muted">결재 채널이 없습니다.</p>{% endif %}
+</section>
+<section class="section stack" id="open-items">
+  <h2>진행 중인 건 <span class="muted">{{ open_items|length }}건</span></h2>
+  <p class="muted">부재 등으로 담당자를 바꿀 때 씁니다. 담당자가 없거나 비활성이라 멈춘 건은 폐기할 수 있습니다. 본문을 보려면 채널 읽기 권한이 있어야 합니다.</p>
+  {% for row in open_items %}
+  <details class="flow-open">
+    <summary><strong>{{ row.title }}</strong>{% if row.stalled %} <span class="tag danger">멈춤</span>{% endif %} <span class="muted">{{ row.step_label }} · {% for _, name, active in row.waiting %}{{ name }}{% if not active %}(비활성){% endif %}{% if not loop.last %}, {% endif %}{% else %}{{ "담당자 없음" if row.can_reassign else "보완 중" }}{% endfor %} · 등록 {{ row.registrant }}</span></summary>
+    {% if row.can_reassign %}
+    <form class="stack" hx-post="/flows/{{ row.post_id }}/reassign">
+      <label>바꿀 담당자
+        <select name="old_id">{% for id, name, active in row.waiting %}<option value="{{ id }}">{{ name }}{% if not active %} (비활성){% endif %}</option>{% endfor %}<option value="">바꾸지 않고 더하기</option></select>
+      </label>
+      {{ people_picker("new_id", "/flows/%d/reassign-people" % row.post_id, [], 1, "새 담당자 찾기") }}
+      <input name="reason" required maxlength="1000" placeholder="사유" aria-label="{{ row.title }} 담당자 변경 사유">
+      <div class="row"><button>담당자 변경</button></div>
+    </form>
+    {% endif %}
+    {% if row.stalled %}
+    <form class="stack" hx-post="/flows/{{ row.post_id }}/discard" hx-confirm="이 건을 폐기할까요? 되돌릴 수 없습니다.">
+      <input name="reason" required maxlength="1000" placeholder="폐기 사유" aria-label="{{ row.title }} 폐기 사유">
+      <div class="row"><button class="danger">폐기</button></div>
+    </form>
+    {% endif %}
+  </details>
+  {% else %}<p class="muted">진행 중인 건이 없습니다.</p>{% endfor %}
+</section>
+<script src="{{ asset('flow-editor.js') }}" defer></script>
+{% endblock %}

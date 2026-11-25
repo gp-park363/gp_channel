@@ -1,0 +1,65 @@
+{% extends "channel_page.html" %}
+{% from "partials/icons.html" import icon %}
+{% from "partials/flow_fields.html" import flow_fields %}
+{% block title %}{{ v.post.title }} · 바로채널{% endblock %}
+{% block content %}
+<a class="back" href="/channels/{{ channel.id }}">{{ icon("back") }}{{ channel.name }}</a>
+{% if source %}<p class="muted">원래 건: <a href="/flows/{{ source.id }}">{{ source.title }}</a></p>{% endif %}
+{% include "partials/post_card.html" %}
+{% if action %}
+<section class="section stack" id="flow-action">
+  <h2>{{ action.step.label }} <span class="muted">{{ action.complete_label }} 완료</span></h2>
+  <form class="stack" hx-post="/flows/{{ v.post.id }}/complete" hx-encoding="multipart/form-data" hx-swap="none">
+    <input type="hidden" name="round" value="{{ action.round }}">
+    <input type="hidden" name="step_no" value="{{ action.step_no }}">
+    <input type="hidden" name="seen" value="{{ action.seen }}">
+    {{ flow_fields(action.inputs, people_url) }}
+    <label><span>의견 <small class="muted">선택</small></span><textarea name="comment" rows="2" maxlength="1000">{{ action.comment }}</textarea></label>
+    {% if action.middle %}
+    <p class="muted">마무리하면 남은 단계({{ action.skipped|join(", ") }})를 생략하고 완료합니다. 되돌릴 수 없습니다.</p>
+    <div class="row">
+      <button class="primary" name="decision" value="continue">확정하고 다음 단계로</button>
+      <button name="decision" value="finish" data-confirm="남은 단계({{ action.skipped|join(", ") }})를 생략하고 마무리할까요? 되돌릴 수 없습니다.">확정하고 마무리</button>
+    </div>
+    {% else %}
+    <div class="row"><button class="primary">{{ action.done_label }}</button></div>
+    {% endif %}
+  </form>
+  <details class="approval-form">
+    <summary>보완 요청</summary>
+    <form class="stack" hx-post="/flows/{{ v.post.id }}/return" hx-swap="none">
+      <input type="hidden" name="round" value="{{ action.round }}">
+      <input type="hidden" name="step_no" value="{{ action.step_no }}">
+      <label>돌려보낼 단계
+        <select name="target">{% for number, label in action.targets %}<option value="{{ number }}">{{ number + 1 }}. {{ label }}</option>{% endfor %}</select>
+      </label>
+      <p class="muted">고른 단계부터 차례대로 다시 진행합니다.</p>
+      <textarea name="reason" rows="2" maxlength="1000" required placeholder="보완할 내용" aria-label="보완할 내용"></textarea>
+      <button>보완 요청</button>
+    </form>
+  </details>
+  {% if action.can_reject %}
+  <details class="approval-form">
+    <summary>반려</summary>
+    <form class="stack" hx-post="/flows/{{ v.post.id }}/reject" hx-swap="none">
+      <input type="hidden" name="round" value="{{ action.round }}">
+      <input type="hidden" name="step_no" value="{{ action.step_no }}">
+      <textarea name="reason" rows="2" maxlength="1000" required placeholder="반려 사유" aria-label="반려 사유"></textarea>
+      <button class="danger">반려</button>
+    </form>
+  </details>
+  {% endif %}
+</section>
+{% endif %}
+{% if flow.can_raise %}
+<section class="section stack">
+  <h2>결재 올리기</h2>
+  <p class="muted">이 건을 바탕으로 결재를 작성합니다. 올린 사람이 기안자가 되고, 이후는 결재 채널의 규칙을 따릅니다.</p>
+  {% if raise_targets %}
+  <div class="row">{% for target in raise_targets %}<a class="button{% if loop.first %} soft{% endif %}" href="/channels/{{ target.id }}/approvals/new?flow={{ v.post.id }}"># {{ target.name }}</a>{% endfor %}</div>
+  {% else %}<p class="muted">쓰기 권한이 있는 결재 채널이 없습니다.</p>{% endif %}
+</section>
+{% endif %}
+{% if is_channel_manager and flow.item.status in ("in_progress", "returned") %}<p class="muted"><a href="/channels/{{ channel.id }}/flow#open-items">담당자 변경은 워크플로우 설정에서 합니다.</a></p>{% endif %}
+{% if show_thread %}<div hidden data-auto-thread="/posts/{{ v.post.id }}/thread"></div>{% endif %}
+{% endblock %}

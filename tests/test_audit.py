@@ -116,8 +116,13 @@ def test_every_recorded_action_has_a_label() -> None:
         if "action=" in line
         for action in re.findall(r'"([a-z]+\.[a-z_]+)"', line)
     }
-    approval_steps = re.findall(r'audit\(session, doc, [\w.]+, "([a-z_]+)"', source)
-    actions |= {f"approval.{step}" for step in approval_steps}
-    assert approval_steps
+    for prefix, path in (
+        ("approval", "src/app/routers/approvals.py"),
+        ("flow", "src/app/services/flows.py"),
+    ):
+        code = Path(path).read_text()
+        steps = re.findall(r'\baudit\(\s*session,\s*doc,\s*[\w.]+,\s*"([a-z_]+)"', code)
+        assert steps, path
+        actions |= {f"{prefix}.{step}" for step in steps}
     missing = sorted(action for action in actions if action not in ACTION_LABELS)
     assert missing == [], missing

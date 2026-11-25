@@ -201,7 +201,7 @@ def test_any_wrong_row_applies_nothing() -> None:
         "채널 시트 5행: 채널 유형은 바꿀 수 없습니다.",
         "채널 시트 6행: 순서는 0~10000 사이의 숫자로 적어 주세요.",
         "채널 시트 6행: 고정 글 수는 0~50 사이의 숫자로 적어 주세요.",
-        "채널 시트 7행: 유형은 소통, 투표, 문서, 결재, 업무 중 하나로 적어 주세요.",
+        "채널 시트 7행: 유형은 소통, 투표, 문서, 결재, 업무, 워크플로우 중 하나로 적어 주세요.",
         "권한 시트 2행: 없는 채널입니다: 없는 채널",
         "권한 시트 2행: 없는 소속입니다: 영업팀",
         "권한 시트 3행: 없는 사용자입니다: ghost@test.local",
@@ -239,7 +239,7 @@ def test_export_covers_managed_groups_and_round_trips() -> None:
 
     # 그룹은 관리하는 그룹만 고른다.
     assert options(lists[("채널", "A2")]) == ["영업"]
-    assert options(lists[("채널", "C2")]) == ["소통", "투표", "문서", "결재", "업무"]
+    assert options(lists[("채널", "C2")]) == ["소통", "투표", "문서", "결재", "업무", "워크플로우"]
     assert options(lists[("권한", "A2")]) == ["영업"]
     assert lists[("권한", "B2")] == "'채널'!$B$2:$B$5001"
     assert "본사" in options(lists[("권한", "C2")])

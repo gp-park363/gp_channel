@@ -8,6 +8,7 @@
 <h1>새 결재</h1>
 <form class="section stack" hx-post="/channels/{{ channel.id }}/approvals" hx-encoding="multipart/form-data">
   {% if reference %}<input type="hidden" name="reference_post_id" value="{{ reference }}"><p class="muted">참조 문서의 본문과 첨부를 불러옵니다.</p>{% endif %}
+  {% if flow %}<input type="hidden" name="flow_post_id" value="{{ flow }}"><p class="muted"><a href="/flows/{{ flow }}">워크플로우 건</a>의 사본을 본문에 채웠습니다. 상신하기 전까지 고칠 수 있습니다.</p>{% endif %}
   <label>제목 <input name="title" required maxlength="200" value="{{ title_text }}"></label>
   {% if departments %}
   <label>기안 소속
@@ -18,6 +19,11 @@
   {% endif %}
   {{ approval_planner(planner) }}
   {{ editor("본문", value=body, rows=12) }}
+  {% if flow_files %}
+  <fieldset class="flow-options"><legend>함께 넣을 첨부</legend>
+    {% for file in flow_files %}<label class="check"><input type="checkbox" name="flow_files" value="{{ file.id }}" checked> {{ file.file_name }} <span class="muted">{{ file.size|filesize }}</span></label>{% endfor %}
+  </fieldset>
+  {% endif %}
   {% include "partials/file_picker.html" %}
   <button class="primary">임시저장</button>
   <p class="muted">임시저장한 뒤 문서를 확인하고 상신합니다. 결재선과 검토자·참조자는 상신 전까지 고칠 수 있습니다.</p>

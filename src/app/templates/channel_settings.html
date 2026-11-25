@@ -96,6 +96,13 @@
   <button class="primary">저장</button>
 </form>
 {% endif %}
+{% if channel.type == "flow" %}
+<section class="section stack">
+  <h2>워크플로우</h2>
+  <p class="muted">단계, 입력 항목, 담당자, 결재 연계를 설정하고 진행 중인 건의 담당자를 바꿉니다.</p>
+  <p><a class="button" href="/channels/{{ channel.id }}/flow">워크플로우 설정</a></p>
+</section>
+{% endif %}
 {% if channel.type == "work" %}
 <section class="section stack">
   <h2>명령어</h2>

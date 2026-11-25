@@ -19,6 +19,8 @@ from app.models import (
     ApprovalStep,
     Channel,
     Department,
+    FlowApproval,
+    FlowItem,
     Notification,
     Post,
     User,
@@ -127,9 +129,12 @@ async def primary_departments(session: AsyncSession, user_ids: Iterable[int]) ->
 
 
 async def search_people(
-    session: AsyncSession, query: str, exclude: Iterable[int] = ()
+    session: AsyncSession,
+    query: str,
+    exclude: Iterable[int] = (),
+    within: Iterable[int] | None = None,
 ) -> list[dict[str, object]]:
-    """이름, 이메일, 소속으로 활성 사용자를 찾는다."""
+    """이름, 이메일, 소속으로 활성 사용자를 찾는다. within을 주면 그 안에서만 찾는다."""
     in_department = (
         select(UserDepartment.user_id)
         .join(Department, Department.id == UserDepartment.department_id)
@@ -141,6 +146,7 @@ async def search_people(
             .where(
                 User.status == "active",
                 User.id.not_in(set(exclude)),
+                *([] if within is None else [User.id.in_(set(within))]),
                 or_(
                     User.name.contains(query, autoescape=True),
                     User.email.contains(query, autoescape=True),
@@ -393,6 +399,8 @@ class ApprovalView:
     can_dispatch: bool = False
     origin: str | None = None
     dispatches: list[tuple[str, str]] = field(default_factory=list)
+    # 바탕이 된 워크플로우 건의 글 번호.
+    flow_post_id: int | None = None
 
 
 def step_label(step_no: int, last: int) -> str:
@@ -419,6 +427,15 @@ async def approval_views(
     ids = [approval.id for approval in approvals]
     dispatches = await dispatch_statuses(session, ids)
     origins = await dispatch_origins(session, ids)
+    flows = dict(
+        (
+            await session.execute(
+                select(FlowApproval.approval_id, FlowItem.post_id)
+                .join(FlowItem, FlowItem.id == FlowApproval.item_id)
+                .where(FlowApproval.approval_id.in_(ids))
+            )
+        ).all()
+    )
     steps: dict[int, list[ApprovalStep]] = defaultdict(list)
     for step in await session.scalars(
         select(ApprovalStep).where(ApprovalStep.approval_id.in_(ids)).order_by(ApprovalStep.step_no)
@@ -445,6 +462,8 @@ async def approval_views(
         own_steps, own_reviews = steps[approval.id], reviews[approval.id]
         view = ApprovalView(approval, STATUS_LABELS[approval.status])
         view.origin = origins.get(approval.id)
+        if "flow" not in get_settings().disabled_channel_types:
+            view.flow_post_id = flows.get(approval.id)
         view.dispatches = dispatches.get(approval.id, [])
         if approval.status == "receiving":
             # 수신 완료 체크는 그 채널의 읽기와 쓰기가 모두 있어야 한다.
@@ -622,7 +641,11 @@ async def unread_notices(session: AsyncSession, user_id: int) -> list[ResultNoti
     rows = await session.execute(
         select(Notification, Approval)
         .join(Approval, Approval.post_id == Notification.ref_id)
-        .where(Notification.user_id == user_id, Notification.read_at.is_(None))
+        .where(
+            Notification.user_id == user_id,
+            Notification.type == "approval_result",
+            Notification.read_at.is_(None),
+        )
         .order_by(Notification.id.desc())
     )
     return [

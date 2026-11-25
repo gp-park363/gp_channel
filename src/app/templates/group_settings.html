@@ -22,7 +22,7 @@
   <form class="row" hx-post="/groups/{{ group.id }}/channels">
     <input name="name" required maxlength="100" placeholder="새 채널 이름" aria-label="새 채널 이름">
     <select name="type" aria-label="채널 유형">
-      {% for key, label in CHANNEL_TYPES.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
+      {% for key, label in channel_types.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
     </select>
     <button class="primary">채널 추가</button>
   </form>

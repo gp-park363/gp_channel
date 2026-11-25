@@ -33,6 +33,7 @@ ACTION_LABELS = {
     "approval.discard": "폐기",
     "approval.receive": "수신 접수",
     "approval.review": "검토",
+    "approval.publish": "소통 채널 게시",
     "approval.dispatch": "발신",
     "approval.line_change": "승인선 변경",
     "attachment.delete": "첨부 삭제",
@@ -41,6 +42,19 @@ ACTION_LABELS = {
     "channel.dispatch_target": "발신 대상 변경",
     "department.create": "소속 추가",
     "department.update": "소속 변경",
+    "flow.publish": "워크플로우 발행",
+    "flow.assignees": "워크플로우 담당자 변경",
+    "flow.approval_target": "결재 연계 변경",
+    "flow.submit": "제출",
+    "flow.complete": "단계 완료",
+    "flow.return": "보완 요청",
+    "flow.reject": "워크플로우 반려",
+    "flow.cancel": "처리 취소",
+    "flow.withdraw": "회수",
+    "flow.discard": "워크플로우 폐기",
+    "flow.reassign": "담당자 변경",
+    "flow.note": "추가 내용",
+    "flow.approval": "결재 올리기",
     "group.create": "그룹 생성",
     "group.update": "그룹 이름 변경",
     "group.archive": "그룹 보관",
@@ -77,6 +91,7 @@ ACTION_GROUPS: dict[str, tuple[str, tuple[str, ...]]] = {
     "post.": ("글·첨부 삭제", ("post.", "attachment.")),
     "channel.": ("채널 설정", ("channel.",)),
     "work.": ("업무", ("work.",)),
+    "flow.": ("워크플로우", ("flow.",)),
     "group.": ("그룹", ("group.",)),
     "org.": ("조직", ("user.", "department.")),
     "admin.": ("관리자", ("admin.", "system.")),
@@ -84,6 +99,7 @@ ACTION_GROUPS: dict[str, tuple[str, tuple[str, ...]]] = {
 
 TARGET_LABELS = {
     "approval": "결재",
+    "flow": "워크플로우",
     "post": "글",
     "channel": "채널",
     "group": "그룹",
@@ -128,6 +144,14 @@ FIELDS: dict[str, tuple[str, str | None]] = {
     "write": ("쓰기", None),
     "reply_read": ("답글 읽기", None),
     "reply_write": ("답글 쓰기", None),
+    "step": ("단계", None),
+    "label": ("처리", None),
+    "decision": ("중간 확정", None),
+    "return_to": ("돌려보낸 단계", None),
+    "round": ("회차", None),
+    "version": ("버전", None),
+    "reply_id": ("답글", None),
+    "approval_id": ("결재", "approval"),
     "before": ("변경 전", None),
     "after": ("변경 후", None),
 }
@@ -145,6 +169,9 @@ VALUE_LABELS = {
     "doc": "문서",
     "approval": "결재",
     "work": "업무",
+    "flow": "워크플로우",
+    "finish": "마무리",
+    "continue": "다음 단계로",
     **REVIEW_LABELS,
 }
 
@@ -158,7 +185,11 @@ MODELS: dict[str, tuple[type, Any]] = {
 }
 
 # 변경 전후가 번호 목록인 기록. 승인선은 승인자 번호를 순서대로 담는다.
-LIST_KINDS = {"approval.line_change": "user"}
+LIST_KINDS = {
+    "approval.line_change": "user",
+    "flow.assignees": "user",
+    "flow.reassign": "user",
+}
 
 
 def action_label(action: str) -> str:

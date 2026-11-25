@@ -1,0 +1,47 @@
+{% from "partials/flow_chips.html" import flow_chips %}
+{% from "partials/flow_values.html" import flow_values, flow_files %}
+{% set f = v.flow %}
+<div class="approval flow">
+  {{ flow_chips(f.chips) }}
+  {% if f.item.status in ("rejected", "discarded") and f.reason %}<p class="reject-reason">{{ f.status_label }} 사유: {{ f.reason }}</p>
+  {% elif f.reason %}<p class="reject-reason">보완 요청: {{ f.reason }}</p>{% endif %}
+  {% if f.stalled %}<p class="reject-reason">담당자가 없거나 비활성이라 진행할 수 없습니다. 그룹 관리자가 담당자를 바꿔야 합니다.</p>{% endif %}
+  {% if f.approvals %}
+  <ul class="reviews">
+    {% for row in f.approvals %}<li class="tag blue"><a href="/approvals/{{ row.post_id }}">결재 # {{ row.channel_name }}: {{ row.status_label }}</a></li>{% endfor %}
+  </ul>
+  {% endif %}
+  {% for section in f.sections %}{{ flow_values(section) }}{% endfor %}
+  {% if f.notes %}
+  <section class="flow-section">
+    <h4>추가 내용 <span class="muted">{{ f.notes|length }}건</span></h4>
+    {% for note in f.notes %}
+    <div class="flow-note">
+      <a class="tag" href="/flows/{{ v.post.id }}#post-{{ note.post_id }}" data-note="{{ note.post_id }}">{{ note.tag }}</a> <span class="muted">{{ note.at|time }}</span>
+      <div class="body">{{ note.html|safe }}</div>
+      {% if note.files %}{{ flow_files(note.files) }}{% endif %}
+    </div>
+    {% endfor %}
+  </section>
+  {% endif %}
+  <div class="approval-actions">
+    {% if f.can_edit %}<a class="button" href="/flows/{{ v.post.id }}/edit">{{ "이어서 작성" if f.item.status == "draft" else "보완해서 다시 제출" }}</a>{% endif %}
+    {% if f.item.status == "draft" and f.can_edit %}<button hx-post="/flows/{{ v.post.id }}/delete" hx-confirm="임시저장을 지울까요?">삭제</button>{% endif %}
+    {% if f.can_cancel %}<button hx-post="/flows/{{ v.post.id }}/cancel" hx-confirm="내 처리를 취소할까요?">처리 취소</button>{% endif %}
+    {% if f.can_withdraw %}<button hx-post="/flows/{{ v.post.id }}/withdraw" hx-confirm="이 건을 회수할까요? 되돌릴 수 없습니다.">회수</button>{% endif %}
+    {% if f.can_copy %}<button hx-post="/flows/{{ v.post.id }}/copy">새로 등록</button>{% endif %}
+  </div>
+  {% if f.events %}
+  <details class="approval-form flow-history">
+    <summary>처리 이력 {{ f.events|length }}건</summary>
+    <ol class="flow-events">
+      {% for event in f.events %}
+      <li><span class="muted">{{ event.at|time }}</span> <b>{{ event.by }}</b> {{ event.text }}{% if event.comment %}<p>{{ event.comment }}</p>{% endif %}</li>
+      {% endfor %}
+    </ol>
+    {% for number, sections in f.old_rounds %}
+    <details><summary>{{ number }}회차의 지난 내용</summary>{% for section in sections %}{{ flow_values(section) }}{% endfor %}</details>
+    {% endfor %}
+  </details>
+  {% endif %}
+</div>

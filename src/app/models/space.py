@@ -20,6 +20,7 @@ CHANNEL_TYPES = {
     "doc": "문서",
     "approval": "결재",
     "work": "업무",
+    "flow": "워크플로우",
 }
 
 
@@ -44,7 +45,7 @@ class GroupManager(Base):
 class Channel(Base):
     __tablename__ = "channel"
     __table_args__ = (
-        CheckConstraint("type IN ('talk', 'vote', 'doc', 'approval', 'work')", name="type"),
+        CheckConstraint("type IN ('talk', 'vote', 'doc', 'approval', 'work', 'flow')", name="type"),
         CheckConstraint("pin_limit >= 0", name="pin_limit"),
     )
 

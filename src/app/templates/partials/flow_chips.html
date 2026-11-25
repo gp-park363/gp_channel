@@ -1,0 +1,9 @@
+{% macro flow_chips(chips, compact=false) %}
+<ol class="steps flow-steps">
+  {% for chip in chips %}
+  <li class="step {{ {'done': 'approved', 'current': 'current', 'rejected': 'rejected', 'skipped': 'skipped'}.get(chip.state, '') }}">
+    <b>{{ chip.label }}</b>{% if not compact %}{% if chip.names %} {{ chip.names|join(", ") }}{% endif %}{% if chip.at %} <span class="muted">{{ chip.at|time }}</span>{% endif %}{% if chip.state == "current" %} <span class="muted">차례</span>{% endif %}{% if chip.note %} <span class="muted">{{ chip.note }}</span>{% endif %}{% elif chip.state == "done" %}<span class="sr-only"> 완료</span>{% elif chip.state == "skipped" %}<span class="sr-only"> 생략</span>{% endif %}
+  </li>
+  {% endfor %}
+</ol>
+{% endmacro %}

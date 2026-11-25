@@ -1,6 +1,7 @@
 """권한 판정은 이 파일 한 곳에만 둔다.
 
 순서: 승인자 자동 부여 > 사용자 설정(채널, 그룹) > 소속 설정(상위 소속까지) > 기본 차단.
+워크플로우 채널에 등록된 담당자도 승인자 자리에서 판정하되 쓰기는 주지 않는다.
 """
 
 from collections.abc import Iterable, Mapping, Sequence
@@ -9,7 +10,9 @@ from dataclasses import dataclass
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.models import (
+    CHANNEL_TYPES,
     Approval,
     ApprovalLineTemplate,
     ApprovalReference,
@@ -17,6 +20,10 @@ from app.models import (
     ApprovalStep,
     Channel,
     Department,
+    FlowAssignee,
+    FlowItem,
+    FlowPick,
+    FlowTask,
     GroupManager,
     PermissionGrant,
     Post,
@@ -43,6 +50,22 @@ class ChannelAccess:
 NO_ACCESS = ChannelAccess()
 
 
+def is_disabled(channel: Channel) -> bool:
+    """사용을 중지한 유형의 채널."""
+    return channel.type in get_settings().disabled_channel_types
+
+
+def is_closed(channel: Channel) -> bool:
+    """보관한 그룹이나 사용을 중지한 유형의 채널. 누구에게도 열리지 않는다."""
+    return channel.group.archived_at is not None or is_disabled(channel)
+
+
+def available_types() -> dict[str, str]:
+    """새로 만들 수 있는 채널 유형."""
+    disabled = get_settings().disabled_channel_types
+    return {key: label for key, label in CHANNEL_TYPES.items() if key not in disabled}
+
+
 def _first_value(layers: Iterable[Layer], permission: str) -> str | None:
     for layer in layers:
         value = layer.get(permission)
@@ -66,6 +89,7 @@ def decide_access(
     is_approver: bool,
     user_layers: Sequence[Layer],
     department_chains: Sequence[Sequence[Layer]],
+    is_assignee: bool = False,
 ) -> ChannelAccess:
     """user_layers는 [채널, 그룹], chain은 [소속 채널, 소속 그룹, 상위 채널, 상위 그룹, ...]이다."""
     if is_approver:
@@ -73,6 +97,8 @@ def decide_access(
     read, write, reply_read, reply_write = (
         _decide_one(permission, user_layers, department_chains) for permission in PERMISSIONS
     )
+    if is_assignee:
+        return ChannelAccess(True, write, True, True)
     reply_read = reply_read and (read or write)
     reply_write = reply_write and reply_read
     return ChannelAccess(read, write, reply_read, reply_write)
@@ -136,12 +162,47 @@ def _approvers_query(*conditions):
     return select(both.c.channel_id, both.c.user_id).where(*[item(both) for item in conditions])
 
 
+def _document_posts_query(*conditions):
+    """(글, 사람). 검토자, 참조자, 지나간 승인자는 채널이 아니라 그 문서에만 권한이 있다.
+
+    워크플로우는 등록자와 지정되거나 맡은 담당자다. 임시저장은 can_view_post가 작성자 말고는 막는다.
+    """
+    parts = [
+        select(Approval.post_id.label("post_id"), ApprovalReview.reviewer_id.label("user_id")).join(
+            ApprovalReview, ApprovalReview.approval_id == Approval.id
+        ),
+        select(Approval.post_id, ApprovalStep.approver_id).join(
+            ApprovalStep, ApprovalStep.approval_id == Approval.id
+        ),
+        select(Approval.post_id, ApprovalReference.user_id).join(
+            ApprovalReference, ApprovalReference.approval_id == Approval.id
+        ),
+        select(FlowItem.post_id, FlowItem.registrant_id),
+        select(FlowItem.post_id, FlowPick.user_id).join(FlowPick, FlowPick.item_id == FlowItem.id),
+        select(FlowItem.post_id, FlowTask.assignee_id).join(
+            FlowTask, FlowTask.item_id == FlowItem.id
+        ),
+    ]
+    people = parts[0].union(*parts[1:]).subquery()
+    return select(people.c.post_id, people.c.user_id).where(*[item(people) for item in conditions])
+
+
+async def document_users(session: AsyncSession, channel: Channel, root_post_id: int) -> set[int]:
+    """글 단위로 읽고 답할 수 있는 사람."""
+    if is_closed(channel):
+        return set()
+    rows = await session.execute(
+        _document_posts_query(lambda people: people.c.post_id == root_post_id)
+    )
+    return {user_id for _, user_id in rows}
+
+
 async def access_for_users(
     session: AsyncSession, channel: Channel, user_ids: Iterable[int]
 ) -> dict[int, ChannelAccess]:
     """여러 사람을 한 번에 판정한다. @소속이 수백 명으로 펼쳐져도 쿼리 수가 늘지 않는다."""
     ids = set(user_ids)
-    if not ids or channel.group.archived_at is not None:
+    if not ids or is_closed(channel):
         return dict.fromkeys(ids, NO_ACCESS)
     parents = dict((await session.execute(select(Department.id, Department.parent_id))).all())
     memberships = await session.execute(
@@ -178,9 +239,17 @@ async def access_for_users(
         .scalars(1)
         .all()
     )
+    assignees = set(
+        await session.scalars(
+            select(FlowAssignee.user_id).where(
+                FlowAssignee.channel_id == channel.id, FlowAssignee.user_id.in_(ids)
+            )
+        )
+    )
     return {
         user_id: decide_access(
             is_approver=user_id in approvers,
+            is_assignee=user_id in assignees,
             user_layers=layers("user", user_id),
             department_chains=[
                 [layer for department_id in chain for layer in layers("department", department_id)]
@@ -202,6 +271,7 @@ class Authorizer:
         self._chains: list[list[int]] = []
         self._managed: set[int] = set()
         self._approver_channels: set[int] = set()
+        self._assignee_channels: set[int] = set()
         self._document_posts: set[int] = set()
 
     async def _load(self) -> None:
@@ -242,23 +312,15 @@ class Authorizer:
             _approvers_query(lambda both: both.c.user_id == self.user.id)
         )
         self._approver_channels = {channel_id for channel_id, _ in rows}
-        # 검토자, 참조자, 지나간 승인자는 채널이 아니라 그 문서에만 권한이 있다.
-        # 임시저장은 can_view_post가 기안자 말고는 막으므로 상신 전에는 보이지 않는다.
-        self._document_posts = set(
+        self._assignee_channels = set(
             await self.session.scalars(
-                select(Approval.post_id)
-                .join(ApprovalReview, ApprovalReview.approval_id == Approval.id)
-                .where(ApprovalReview.reviewer_id == self.user.id)
-                .union(
-                    select(Approval.post_id)
-                    .join(ApprovalStep, ApprovalStep.approval_id == Approval.id)
-                    .where(ApprovalStep.approver_id == self.user.id),
-                    select(Approval.post_id)
-                    .join(ApprovalReference, ApprovalReference.approval_id == Approval.id)
-                    .where(ApprovalReference.user_id == self.user.id),
-                )
+                select(FlowAssignee.channel_id).where(FlowAssignee.user_id == self.user.id)
             )
         )
+        rows = await self.session.execute(
+            _document_posts_query(lambda people: people.c.user_id == self.user.id)
+        )
+        self._document_posts = {post_id for post_id, _ in rows}
         self._loaded = True
 
     @staticmethod
@@ -280,11 +342,12 @@ class Authorizer:
         return channel.id in self._approver_channels
 
     async def access(self, channel: Channel) -> ChannelAccess:
-        if channel.group.archived_at is not None:
+        if is_closed(channel):
             return NO_ACCESS
         await self._load()
         return decide_access(
             is_approver=self._is_approver(channel),
+            is_assignee=channel.id in self._assignee_channels,
             user_layers=self._subject_layers(channel, "user", self.user.id),
             department_chains=[
                 [
@@ -303,7 +366,7 @@ class Authorizer:
         """
         access = await self.access(channel)
         root = parent.id if parent else post.id
-        if root in self._document_posts and channel.group.archived_at is None:
+        if root in self._document_posts and not is_closed(channel):
             return ChannelAccess(True, access.write, True, True)
         return access
 

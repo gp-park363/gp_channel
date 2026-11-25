@@ -10,6 +10,7 @@ import httpx2
 import pytest
 from sqlalchemy import func, select
 
+from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.models import AuditLog, Post, WorkCommand, WorkMessage
 from app.services import work
@@ -632,3 +633,31 @@ def test_webhook_signature_window() -> None:
     assert not verify_webhook("", str(now), good, body, now)
     assert not verify_webhook("k", "abc", good, body, now)
     assert not verify_webhook("k", str(now), good, b"{}", now)
+
+
+def test_disabled_work_channel_is_closed_and_keeps_data(ready, monkeypatch) -> None:
+    owner, channel, writer, reader = ready
+    secret = issue_key(owner)
+    body = {"text": "중지 전 메시지", "actor": "정영업"}
+    assert hook(command_id(), secret, body).status_code == 202
+    monkeypatch.setattr(get_settings(), "disabled_channel_types", frozenset({"work"}))
+
+    for user in (owner, writer, reader):
+        signed_in = browser(user)
+        assert signed_in.get(f"/channels/{channel.id}").status_code == 404
+        assert signed_in.get(f"/works/{command_id()}/pages/index").status_code in (403, 404)
+        assert api(signed_in, "GET").status_code in (403, 404)
+        assert f'/channels/{channel.id}"' not in signed_in.get("/").text
+    assert leave(browser(writer), {"text": "x"}).status_code in (403, 404)
+    assert hook(command_id(), secret, body, "evt-2").status_code == 409
+    manager = browser(owner)
+    assert manager.get(f"/channels/{channel.id}/settings").status_code == 404
+    assert register(manager, channel, name="other").status_code == 404
+    assert manager.post(f"/work-commands/{command_id()}/webhook").status_code == 404
+    page = manager.get(f"/groups/{channel.group_id}/settings").text
+    assert 'value="work"' not in page and 'value="flow"' in page
+    assert count(WorkMessage) == 1
+
+    monkeypatch.setattr(get_settings(), "disabled_channel_types", frozenset())
+    assert "중지 전 메시지" in browser(reader).get(f"/channels/{channel.id}").text
+    assert hook(command_id(), secret, body, "evt-2").status_code == 202

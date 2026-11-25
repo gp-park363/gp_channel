@@ -11,6 +11,7 @@ os.environ.update(
     BARO_ADMIN_EMAIL="admin@test.local",
     BARO_ADMIN_PASSWORD="test-password",
     BARO_INTEGRATION_ALLOWED_HOSTS="todo.test,127.0.0.1:8100",
+    BARO_DISABLED_CHANNEL_TYPES="",
     TODO_DB=":memory:",
 )
 

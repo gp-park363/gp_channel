@@ -17,6 +17,15 @@ from app.services.approvals import (
 )
 from app.services.dispatch import receiving_for
 from app.services.documents import document_rows
+from app.services.flow_views import (
+    flow_list,
+    flow_notices,
+    my_flow_handled,
+    my_flow_registered,
+    my_flow_returned,
+    my_flow_turns,
+    stalled_flows,
+)
 from app.services.mentions import pending_acks
 from app.services.navigation import build_navigation
 from app.services.permissions import ChannelAccess
@@ -66,6 +75,12 @@ async def todo(request: Request, session: SessionDep, authz: AuthzDep) -> HTMLRe
             "notices": await unread_notices(session, authz.user.id),
             "drafts": await my_drafts(session, authz.user.id),
             "handled": await my_handled(session, authz.user.id),
+            "flow_stalled": await stalled_flows(session, await authz.managed_group_ids()),
+            "flow_turns": await my_flow_turns(session, authz.user.id),
+            "flow_returned": await my_flow_returned(session, authz.user.id),
+            "flow_notices": await flow_notices(session, authz.user.id),
+            "flow_registered": await my_flow_registered(session, authz.user.id),
+            "flow_handled": await my_flow_handled(session, authz.user.id),
         },
     )
 
@@ -100,7 +115,10 @@ async def channel_page(
     access = await authz.access(channel) if channel else None
     if channel is None or access is None or not access.can_enter:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "채널을 찾을 수 없습니다.")
-    posts, has_more = await timeline_posts(session, channel, access, authz.user.id)
+    flows = channel.type == "flow"
+    posts, has_more = (
+        ([], False) if flows else await timeline_posts(session, channel, access, authz.user.id)
+    )
     if counts_unread(channel, access):
         await mark_read(session, authz.user.id, channel.id)
         await session.commit()
@@ -125,6 +143,7 @@ async def channel_page(
             "documents": await document_rows(session, channel, access, authz.user.id)
             if channel.type == "doc"
             else [],
+            "listing": await flow_list(session, channel, access, authz.user.id) if flows else None,
         },
     )
 

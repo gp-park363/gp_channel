@@ -1,0 +1,53 @@
+{# 워크플로우의 입력 칸. 등록 화면, 단계 처리, 미리보기가 함께 쓴다. #}
+{% from "partials/editor.html" import editor %}
+{% macro people_picker(name, url, people=[], max=20, placeholder="이름, 이메일, 소속으로 찾기") %}
+<div class="people-picker" data-name="{{ name }}" data-url="{{ url }}" data-max="{{ max }}" data-people='{{ people|tojson }}'>
+  <ul class="line-steps"></ul>
+  <div class="line-search"><input type="search" autocomplete="off" placeholder="{{ placeholder }}" aria-label="{{ placeholder }}"></div>
+  <div class="picker-inputs" hidden></div>
+</div>
+{% endmacro %}
+{% macro badge(spec) %}{% if spec.required %} <b class="required">필수</b>{% endif %}{% endmacro %}
+{% macro mark(spec) %}{{ spec.label }}{% if spec.unit %} ({{ spec.unit }}){% endif %}{{ badge(spec) }}{% endmacro %}
+{% macro flow_fields(inputs, people_url) %}
+{% for row in inputs %}
+{% set spec = row.spec %}
+{% set name = "v_" ~ spec.key %}
+<div class="flow-field">
+  {% if spec.kind == "markdown" %}
+  {{ editor(spec.label, badge=badge(spec), name=name, value=row.value or "", rows=6, required=spec.required, maxlength=10000) }}
+  {% elif spec.kind == "multiselect" %}
+  <fieldset class="flow-options"><legend>{{ mark(spec) }}</legend>
+    {% for option in spec.options %}<label class="check"><input type="checkbox" name="{{ name }}" value="{{ option }}"{% if option in (row.value or []) %} checked{% endif %}> {{ option }}</label>{% endfor %}
+  </fieldset>
+  {% elif spec.kind == "check" %}
+  <label class="check"><input type="checkbox" name="{{ name }}" value="1"{% if row.value %} checked{% endif %}{% if spec.required %} required{% endif %}> <span>{{ mark(spec) }}</span></label>
+  {% elif spec.kind == "file" %}
+  <fieldset class="flow-options"><legend>{{ mark(spec) }}</legend>
+    {% for file in row.files %}<label class="check"><input type="checkbox" name="k_{{ spec.key }}" value="{{ file.id }}" checked> {{ file.file_name }} <span class="muted">{{ file.size|filesize }} · 체크를 빼면 제외</span></label>{% endfor %}
+    <input type="file" name="{{ name }}" multiple aria-label="{{ spec.label }}"{% if spec.required and not row.files %} required{% endif %}>
+  </fieldset>
+  {% elif spec.kind == "person" %}
+  <fieldset class="flow-options"><legend>{{ mark(spec) }}</legend>
+    {{ people_picker(name, people_url, row.people, 20 if spec.multiple else 1) }}
+  </fieldset>
+  {% else %}
+  <label><span>{{ mark(spec) }}</span>
+    {% if spec.kind == "select" %}
+    <select name="{{ name }}"{% if spec.required %} required{% endif %}>
+      <option value="">고르세요</option>
+      {% for option in spec.options %}<option value="{{ option }}"{% if option == row.value %} selected{% endif %}>{{ option }}</option>{% endfor %}
+    </select>
+    {% elif spec.kind == "number" %}
+    <input type="number" name="{{ name }}" value="{{ row.value or '' }}" step="{{ '1' if not spec.decimals else '0.' ~ '0' * (spec.decimals - 1) ~ '1' }}"{% if spec.min is not none %} min="{{ spec.min }}"{% endif %}{% if spec.max is not none %} max="{{ spec.max }}"{% endif %}{% if spec.required %} required{% endif %}>
+    {% elif spec.kind == "date" %}
+    <input type="date" name="{{ name }}" value="{{ row.value or '' }}"{% if spec.required %} required{% endif %}>
+    {% else %}
+    <input name="{{ name }}" value="{{ row.value or '' }}" maxlength="200"{% if spec.required %} required{% endif %}>
+    {% endif %}
+  </label>
+  {% endif %}
+  {% if spec.help %}<p class="muted">{{ spec.help }}</p>{% endif %}
+</div>
+{% endfor %}
+{% endmacro %}
