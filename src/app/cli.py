@@ -12,6 +12,7 @@ from sqlalchemy import text
 from app.core.config import Settings, get_settings
 from app.core.db import SessionLocal, engine
 from app.seed import EMAIL_DOMAIN, SAMPLE_PASSWORD, seed
+from app.services.push import generate_private_key
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1"}
 
@@ -68,10 +69,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="바로채널 서버 관리 도구")
     parser.add_argument(
         "command",
-        choices=["reset-dev"],
-        help="reset-dev: 개발 DB를 지우고 샘플 데이터를 넣는다",
+        choices=["reset-dev", "vapid-key"],
+        help="reset-dev: 개발 DB를 지우고 샘플 데이터를 넣는다. vapid-key: 알림 서명 키를 만든다",
     )
-    parser.parse_args()
+    if parser.parse_args().command == "vapid-key":
+        # 설정을 바꾸지 않고 값만 보여준다. .env에 넣는 것은 사람이 한다.
+        print(f"BARO_VAPID_PRIVATE_KEY={generate_private_key()}")
+        return
     refusal = reset_refusal(get_settings())
     if refusal:
         parser.error(refusal)

@@ -29,6 +29,9 @@
   {% if not is_system_admin(user) %}
   <a class="menu-row" href="/account/password"><span class="menu-icon">{{ icon("lock") }}</span><span class="menu-text"><strong>비밀번호 변경</strong></span>{{ icon("chevron") }}</a>
   {% endif %}
+  {% if push_test %}
+  <a class="menu-row" href="/push-test"><span class="menu-icon">{{ icon("settings") }}</span><span class="menu-text"><strong>알림 시험</strong><small>이 기기에서 알림이 오는지 확인</small></span>{{ icon("chevron") }}</a>
+  {% endif %}
   <button class="menu-row" hx-post="/logout"><span class="menu-icon">{{ icon("logout") }}</span><span class="menu-text"><strong>로그아웃</strong></span></button>
 </section>
 {% endblock %}

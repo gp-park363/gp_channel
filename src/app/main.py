@@ -29,10 +29,12 @@ from app.routers import (
     pages,
     polls,
     posts,
+    push_test,
     search,
     spaces,
     work,
 )
+from app.services import push
 from app.services.realtime import hub
 from app.services.storage import ensure_bucket
 from app.services.work import screens
@@ -47,6 +49,8 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
         raise RuntimeError("운영에서는 BARO_SECRET_KEY를 설정해야 합니다.")
     if not settings.debug and settings.admin_email and not settings.admin_password:
         raise RuntimeError("BARO_ADMIN_EMAIL을 쓰려면 BARO_ADMIN_PASSWORD를 설정해야 합니다.")
+    if problem := push.config_problem():
+        raise RuntimeError(problem)
     # 업무 화면 정의가 틀렸으면 시작하지 않는다.
     screens()
     try:
@@ -117,6 +121,7 @@ def create_app() -> FastAPI:
         audit,
         attachments,
         events,
+        push_test,
     ):
         application.include_router(module.router)
     application.include_router(work.hook_router)

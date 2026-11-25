@@ -59,6 +59,9 @@ services:
       BARO_INTEGRATION_ALLOWED_HOSTS: ${BARO_INTEGRATION_ALLOWED_HOSTS:-}
       # 빈 값으로 두면 모두 켠다. 줄이 없으면 업무 채널을 중지한다.
       BARO_DISABLED_CHANNEL_TYPES: ${BARO_DISABLED_CHANNEL_TYPES-work}
+      # 웹 푸시. 키가 비어 있으면 알림을 쓰지 않는다.
+      BARO_VAPID_PRIVATE_KEY: ${BARO_VAPID_PRIVATE_KEY:-}
+      BARO_VAPID_SUBJECT: ${BARO_VAPID_SUBJECT:-}
       # 앱 포트는 외부에 열지 않고 Caddy만 붙으므로, 내부망에서 온 X-Forwarded-* 헤더를 믿는다.
       FORWARDED_ALLOW_IPS: "*"
     # Dockerfile의 HEALTHCHECK와 같다. deploy/nas.sh ship은 이미지를 한 층으로 합쳐 보내는데
