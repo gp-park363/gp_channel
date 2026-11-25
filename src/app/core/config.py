@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     integration_allowed_hosts: Annotated[frozenset[str], NoDecode] = frozenset()
     integration_timeout_seconds: float = Field(default=5, gt=0, le=30)
 
+    # 웹 푸시 서명 키. 비우면 알림을 쓰지 않는다. barochannel-admin vapid-key로 만든다.
+    vapid_private_key: str = ""
+    # 푸시 서비스에 전달되는 연락처. mailto: 또는 https://로 시작한다.
+    vapid_subject: str = ""
+
     @field_validator("admin_email")
     @classmethod
     def normalize_admin_email(cls, value: str) -> str:

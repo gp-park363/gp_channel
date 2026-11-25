@@ -31,6 +31,8 @@ PUBLIC = {
     ("POST", "/logout"),
     ("GET", "/healthz"),
     ("GET", "/favicon.ico"),
+    # 개인 정보가 없는 정적 스크립트. 로그인이 풀려도 브라우저가 새 판을 받을 수 있어야 한다.
+    ("GET", "/sw.js"),
 }
 DOC_PATHS = {"/docs", "/docs/oauth2-redirect", "/openapi.json"}
 # 로그인 세션 대신 서명으로 인증하는 외부 시스템용 주소(F-98). 아래에서 따로 확인한다.
