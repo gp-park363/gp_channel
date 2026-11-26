@@ -250,7 +250,7 @@ def step_chips(
             people = [names.get(t.assignee_id, "") for t in doc.tasks if t.status == "rejected"]
             chips.append(StepChip(step["label"], "rejected", people[-1:], item.closed_at, "반려"))
         else:
-            fixed = step.get("assign") == "fixed"
+            fixed = step.get("assign") == "fixed" and step["key"] not in doc.picks
             planned = listed.get(step["key"], []) if fixed else doc.picks.get(step["key"], [])
             chips.append(
                 StepChip(step["label"], "waiting", [names.get(one, "") for one in planned])
@@ -546,7 +546,7 @@ class ActionView:
     step_no: int
     seen: int
     complete_label: str = ""
-    # 확정 단계가 돌려보내 이 단계에 추가만 할 수 있다.
+    # 돌려보내 이 단계에 추가만 할 수 있다.
     add_only: bool = False
 
 

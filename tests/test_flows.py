@@ -167,7 +167,12 @@ def register(place: Place, by: User | None = None, action="submit", signed_in=No
 def submitted(place: Place, **data) -> int:
     response = register(place, **data)
     assert response.status_code == 200, response.text
-    return int(response.headers["HX-Redirect"].rsplit("/", 1)[1])
+    if data.get("action") == "draft":
+        assert response.headers["HX-Redirect"].startswith("/flows/")
+    else:
+        assert response.headers["HX-Redirect"] == f"/channels/{place.channel.id}"
+    newest = select(FlowItem.post_id).order_by(FlowItem.id.desc()).limit(1)
+    return fetch(newest)[0]
 
 
 def act(user: User, post: int, action="complete", signed_in=None, **data):
@@ -785,28 +790,32 @@ def test_return_to_register_reruns_every_step(place: Place) -> None:
     assert response.status_code == 200
     item = item_of(post)
     assert (item.status, item.round, item.current_step) == ("returned", 2, 0)
-    assert (
-        count(place.writer) == 1 and "보완할 워크플로우" in browser(place.writer).get("/todo").text
-    )
+    assert count(place.writer) == 1
+    assert "보완할 워크플로우" in browser(place.writer).get("/todo").text
     signed_in = browser(place.writer)
-    assert "문구가 틀립니다" in signed_in.get(f"/flows/{post}/edit").text
-    data = {"definition_id": item.definition_id, "title": "브로슈어 3안", "v_f1": "고친 내용"}
+    page = signed_in.get(f"/flows/{post}/edit").text
+    assert "문구가 틀립니다" in page and "고칠 수 없고 추가만" in page
+    data = {"definition_id": item.definition_id, "title": "브로슈어 3안", "v_f1": "더한 내용"}
     for step in definition(place).steps[1:]:
         person = {"process": place.worker, "review": place.reviewer, "confirm": place.final}
         data[f"p_{step['key']}"] = person[step["kind"]].id
     assert signed_in.post(f"/flows/{post}/edit", data=data).status_code == 200
     assert item_of(post).status == "in_progress" and item_of(post).current_step == 1
-    assert "작업함" in browser(place.worker).get(f"/flows/{post}").text
+    # 처리자도 이전 작업을 고치지 못하고 추가한다.
+    page = browser(place.worker).get(f"/flows/{post}").text
+    assert "작업함" in page and "작업함</textarea>" not in page
     process(place, post, "다시 작업함")
     page = browser(place.reader).get(f"/flows/{post}").text
-    assert "고친 내용" in page and "1회차의 지난 내용" in page and "브로슈어 2안" in page
+    for text in ("표지를 고쳐 주세요", "더한 내용", "작업함", "다시 작업함", "브로슈어 2안"):
+        assert text in page, text
+    assert "브로슈어 3안" not in page
     review(place, post)
     done(place.final, post)
     assert item_of(post).status == "done"
 
 
-def test_review_return_to_process_step_can_edit(place: Place) -> None:
-    """검토 단계가 돌려보내면 이전 값을 고칠 수 있다."""
+def test_review_return_locks_process_content(place: Place) -> None:
+    """검토 단계가 돌려보내도 이미 작성한 내용은 고치지 못하고 추가만 한다."""
     post = submitted(place)
     process(place, post, files=[("v_f4", ("초안.txt", b"1"))])
     # 없는 단계는 고를 수 없다.
@@ -816,12 +825,15 @@ def test_review_return_to_process_step_can_edit(place: Place) -> None:
     assert (item.status, item.round, item.current_step) == ("in_progress", 2, 1)
     assert count(place.worker) == 1 and count(place.writer) == 0
     page = browser(place.worker).get(f"/flows/{post}").text
-    assert "초안.txt" in page and "작업함</textarea>" in page
+    assert "초안.txt" in page and "작업함</textarea>" not in page and "추가됩니다" in page
     (file,) = fetch(select(Attachment))
+    # 잠긴 첨부를 다시 보내도 새 완료에 들어가지 않는다.
     process(place, post, "고침", k_f4=file.id)
-    newest = [row for row in tasks_of(post) if row.step_no == 1 and row.status == "done"][-1]
-    assert newest.values == {"f3": "고침", "f4": [file.id]}
+    first, newest = [row for row in tasks_of(post) if row.step_no == 1 and row.status == "done"]
+    assert first.values == {"f3": "작업함", "f4": [file.id]} and newest.values == {"f3": "고침"}
     assert item_of(post).current_step == 2 and count(place.reviewer) == 1
+    page = browser(place.reader).get(f"/flows/{post}").text
+    assert "작업함" in page and "고침" in page and "처리 추가" in page
 
 
 def test_step_template_fills_first_input_only(place: Place) -> None:
@@ -920,19 +932,20 @@ def test_lock_cannot_be_avoided_by_returning_further(place: Place) -> None:
     assert fetch(select(Post.title).where(Post.id == post)) == ["브로슈어 2안"]
 
 
-def test_addition_can_be_edited_until_next_confirm_return(place: Place) -> None:
+def test_addition_is_editable_only_until_returned(place: Place) -> None:
     post = confirm_return(place, 1)
     done(place.worker, post, v_f3="추가 1")
-    assert act(place.reviewer, post, "return", target=1, reason="다시").status_code == 200
-    # 검토가 돌려보낸 것이므로 추가한 부분만 고칠 수 있다.
+    # 다음 단계가 하기 전에는 처리 취소로 추가한 부분만 고친다.
+    assert act(place.worker, post, "cancel").status_code == 200
     page = browser(place.worker).get(f"/flows/{post}").text
     assert "추가 1</textarea>" in page and "처음 작업</textarea>" not in page
     done(place.worker, post, v_f3="추가 1 고침")
-    done(place.reviewer, post, v_f5="검토 추가")
-    act(place.final, post, "return", target=1, reason="또 추가")
+    # 검토가 돌려보내면 추가한 내용도 잠긴다.
+    assert act(place.reviewer, post, "return", target=1, reason="다시").status_code == 200
     page = browser(place.worker).get(f"/flows/{post}").text
     assert "추가 1 고침" in page and "추가 1 고침</textarea>" not in page
     done(place.worker, post, v_f3="추가 2")
+    done(place.reviewer, post, v_f5="검토 추가")
     page = browser(place.reader).get(f"/flows/{post}").text
     for text in ("처음 작업", "추가 1 고침", "추가 2", "처음 검토", "검토 추가"):
         assert text in page, text
@@ -969,8 +982,8 @@ def test_new_assignee_of_everyone_step_still_fills_required(place: Place) -> Non
     process(place, post)
     review(place, post)
     act(place.final, post, "return", target=2, reason="다시")
-    data = {"old_id": "", "new_id": place.reader.id, "reason": "검토자 추가"}
-    assert browser(place.manager).post(f"/flows/{post}/reassign", data=data).status_code == 200
+    added = change(place.writer, post, 2, place.reviewer, place.reader)
+    assert added.status_code == 200, added.text
     assert "필수" in act(place.reader, post).json()["detail"]
     done(place.reader, post, v_f5="저도 봤습니다")
     done(place.reviewer, post)
@@ -1131,19 +1144,138 @@ def test_stalled_item_is_shown_to_manager_and_reassigned(place: Place) -> None:
     assert waiting == [place.reader.id]
 
 
-def test_reassign_is_limited_to_manager_and_allowed_people(place: Place) -> None:
+def test_manager_reassigns_only_stalled_items(place: Place) -> None:
     post = submitted(place)
-    stranger = add_user("stranger")
-    data = {"old_id": place.worker.id, "new_id": stranger.id, "reason": "x"}
-    assert browser(place.manager).post(f"/flows/{post}/reassign", data=data).status_code == 400
-    data["new_id"] = place.reader.id
+    data = {"old_id": place.worker.id, "new_id": place.reader.id, "reason": "x"}
+    # 멈추지 않은 건은 등록자와 확정자가 바꾼다.
+    assert browser(place.manager).post(f"/flows/{post}/reassign", data=data).status_code == 409
+    assert browser(place.manager).get(f"/flows/{post}/reassign-people?q=").json() == []
     assert browser(place.writer).post(f"/flows/{post}/reassign", data=data).status_code == 403
+    deactivate(place.worker)
+    stranger = add_user("stranger")
+    data["new_id"] = stranger.id
+    assert browser(place.manager).post(f"/flows/{post}/reassign", data=data).status_code == 400
+
+
+def change(user: User, post: int, step_no: int, *people: User, reason: str = ""):
+    return browser(user).post(
+        f"/flows/{post}/assignees",
+        data={"step_no": step_no, "people": [one.id for one in people], "reason": reason},
+    )
+
+
+def waiting_people(post: int) -> list[int]:
+    return sorted(row.assignee_id for row in tasks_of(post) if row.status == "waiting")
+
+
+def test_registrant_changes_process_and_review_but_not_confirm(place: Place) -> None:
+    post = submitted(place)
+    # 지금 차례인 처리자를 바꾼다.
+    assert change(place.writer, post, 1, place.reader, reason="부재").status_code == 200
+    assert waiting_people(post) == [place.reader.id]
+    assert count(place.worker) == 0 and count(place.reader) == 1
+    # 아직 오지 않은 검토자도 바꾼다.
+    assert change(place.writer, post, 2, place.manager).status_code == 400  # 채널 사용자가 아님
+    grant(place.channel, place.manager, read="allow")
+    assert change(place.writer, post, 2, place.manager).status_code == 200
+    # 확정자는 바꿀 수 없다.
+    assert change(place.writer, post, 3, place.reviewer).status_code == 409
+    page = browser(place.writer).get(f"/flows/{post}").text
+    assert "담당자 변경" in page and 'name="step_no" value="3"' not in page
+    done(place.reader, post, v_f3="대신 작업")
+    assert waiting_people(post) == [place.manager.id]
+    assert "flow.reassign" in audit_actions()
+
+
+def test_confirmer_changes_only_steps_before_own(place: Place) -> None:
+    post = submitted(place)
+    assert change(place.final, post, 1, place.reader).status_code == 200
+    assert change(place.final, post, 2, place.worker).status_code == 200
+    assert change(place.final, post, 3, place.reviewer).status_code == 409
+    # 아무 담당도 아닌 사람과 검토자는 바꿀 수 없다.
+    assert change(place.reader, post, 2, place.final).status_code == 409
+    assert change(place.reviewer, post, 1, place.final).status_code == 409
+    assert f"/flows/{post}/assignees" not in browser(place.reviewer).get(f"/flows/{post}").text
+
+
+def test_middle_confirmer_changes_only_before_middle() -> None:
+    place = make_place(middle_steps())
+    keys = [step["key"] for step in definition(place).steps]
+    middle = add_user("middle")
+    grant(place.channel, middle, read="allow")
+    post = submitted(place, **{f"p_{keys[2]}": middle.id})
+    assert change(middle, post, 1, place.reader).status_code == 200
+    assert change(middle, post, 3, place.worker).status_code == 409
+    # 중간 확정자는 최종 확정자만 바꾼다. 등록자와 중간 확정자 자신은 못 바꾼다.
+    assert change(place.writer, post, 2, place.reviewer).status_code == 409
+    assert change(middle, post, 2, place.reviewer).status_code == 409
+    assert change(place.final, post, 2, place.reviewer).status_code == 200
+    # 최종 확정자는 누구도 바꾸지 않는다.
+    for user in (place.writer, place.final, place.reviewer):
+        assert change(user, post, 4, place.worker).status_code == 409
+
+
+def test_steps_already_passed_cannot_be_changed() -> None:
+    place = make_place(middle_steps())
+    post = submitted(place)
     process(place, post)
-    # 처리한 사람과 등록자는 검토를 맡을 수 없다.
-    for user in (place.worker, place.writer):
-        data = {"old_id": place.reviewer.id, "new_id": user.id, "reason": "x"}
-        response = browser(place.manager).post(f"/flows/{post}/reassign", data=data)
-        assert response.status_code == 400
+    done(place.final, post, decision="continue")
+    # 처리와 중간 확정은 이미 지나갔다.
+    for user in (place.writer, place.final):
+        for step_no in (1, 2):
+            assert change(user, post, step_no, place.reader).status_code == 409
+    page = browser(place.final).get(f"/flows/{post}").text
+    assert 'name="step_no" value="1"' not in page and 'name="step_no" value="3"' in page
+
+
+def test_change_keeps_rules_and_finished_steps(place: Place) -> None:
+    post = submitted(place)
+    assert change(place.writer, post, 1).status_code == 400  # 아무도 없음
+    assert change(place.writer, post, 1, place.worker).status_code == 400  # 그대로
+    assert change(place.writer, post, 2, place.writer).status_code == 400  # 등록자 검토
+    process(place, post)
+    # 끝난 처리 단계는 바꿀 수 없고, 처리한 사람은 검토자가 될 수 없다.
+    assert change(place.writer, post, 1, place.reader).status_code == 409
+    assert change(place.writer, post, 2, place.worker).status_code == 400
+    assert change(place.writer, post, 2, place.reader, place.reviewer).status_code == 200
+    assert waiting_people(post) == sorted([place.reader.id, place.reviewer.id])
+
+
+def test_changed_assignee_stays_after_return(place: Place) -> None:
+    post = submitted(place)
+    change(place.writer, post, 1, place.reader)
+    done(place.reader, post, v_f3="작업")
+    act(place.reviewer, post, "return", target=1, reason="다시")
+    assert waiting_people(post) == [place.reader.id]
+
+
+def test_fixed_step_can_be_changed_for_one_item() -> None:
+    place = make_place(publish=False)
+    steps = rules.default_steps()
+    steps[1] |= {"assign": "fixed", "people": [place.worker.id, place.reader.id]}
+    assert save(place, steps).status_code == 200
+    first, second = submitted(place), submitted(place)
+    assert change(place.writer, first, 1, place.reader).status_code == 200
+    assert waiting_people(first) == [place.reader.id]
+    assert sorted(waiting_people(second)) == sorted([place.worker.id, place.reader.id])
+    # 고정 담당자 명단 밖의 사람은 맡길 수 없다.
+    assert change(place.writer, second, 1, place.final).status_code == 400
+
+
+def test_returned_registrant_cannot_change_confirmer(place: Place) -> None:
+    post = submitted(place)
+    process(place, post)
+    act(place.reviewer, post, "return", target=0, reason="다시")
+    page = browser(place.writer).get(f"/flows/{post}/edit").text
+    confirm_key = step_of(place, "confirm")["key"]
+    assert f'name="p_{confirm_key}"' not in page and "final" in page
+    stranger = add_user("other-final")
+    grant(place.channel, stranger, read="allow")
+    response = resubmit(place, post, v_f1="고침", **{f"p_{confirm_key}": stranger.id})
+    assert response.status_code == 200, response.text
+    process(place, post)
+    review(place, post)
+    assert waiting_people(post) == [place.final.id]
 
 
 def test_discard_only_when_stalled(place: Place) -> None:
@@ -1365,17 +1497,20 @@ def test_only_people_who_handled_can_raise_approval(place: Place) -> None:
     assert raise_approval(place.reviewer, channel, post).status_code == 200
 
 
-def test_skipped_assignee_and_old_round_cannot_raise(place: Place) -> None:
+def test_skipped_assignee_cannot_raise_but_locked_worker_can(place: Place) -> None:
     key = step_of(place, "process")["key"]
-    channel = add_expense(place, place.worker, place.reader)
-    post = submitted(place, **{f"p_{key}": [place.worker.id, place.reader.id]})
+    channel = add_expense(place, place.worker, place.reader, place.manager)
+    grant(place.channel, place.manager, read="allow")
+    people = [place.worker.id, place.reader.id, place.manager.id]
+    post = submitted(place, **{f"p_{key}": people})
     process(place, post)
     act(place.reviewer, post, "return", target=1, reason="다시")
-    done(place.reader, post, v_f3="제가 다시 했습니다")
+    done(place.reader, post, v_f3="제가 더했습니다")
     review(place, post)
     done(place.final, post)
-    assert raise_approval(place.worker, channel, post).status_code == 403
-    assert raise_approval(place.reader, channel, post).status_code == 200
+    # 한 번도 처리하지 않은 사람은 올릴 수 없다. 처음 처리한 내용은 잠겨 남으므로 처리자로 본다.
+    assert raise_approval(place.manager, channel, post).status_code == 403
+    assert raise_approval(place.worker, channel, post).status_code == 200
 
 
 def test_approval_form_is_filled_with_copy(place: Place) -> None:
@@ -1634,3 +1769,72 @@ def test_other_channels_stay_open_when_flow_is_disabled(monkeypatch) -> None:
     assert browser(owner).get(f"/channels/{channel.id}").status_code == 200
     monkeypatch.setattr(get_settings(), "disabled_channel_types", frozenset({"work"}))
     assert browser(owner).get(f"/channels/{channel.id}").status_code == 404
+
+
+def test_buttons_return_to_channel_list(place: Place) -> None:
+    channel = f"/channels/{place.channel.id}"
+    draft = submitted(place, action="draft")
+    edited = browser(place.writer).post(
+        f"/flows/{draft}/edit",
+        data={"definition_id": definition(place).id, "title": "t", "action": "draft"},
+    )
+    assert edited.headers["HX-Redirect"] == f"/flows/{draft}"
+    post = submitted(place)
+    for user, data in (
+        (place.worker, {"v_f3": "작업"}),
+        (place.reviewer, {"v_f5": "검토"}),
+        (place.final, {}),
+    ):
+        response = act(user, post, **data)
+        assert response.headers["HX-Redirect"] == channel, user.name
+    # 보완 요청 뒤 다시 제출해도 목록으로 돌아간다.
+    other = submitted(place)
+    process(place, other)
+    returned = act(place.reviewer, other, "return", target=0, reason="다시")
+    assert returned.headers["HX-Redirect"] == channel
+    people = (place.worker, place.reviewer, place.final)
+    picks = {
+        f"p_{step['key']}": person.id
+        for step, person in zip(definition(place).steps[1:], people, strict=True)
+    }
+    response = browser(place.writer).post(
+        f"/flows/{other}/edit",
+        data={"definition_id": item_of(other).definition_id, "title": "t", "v_f1": "고침"} | picks,
+    )
+    assert response.headers["HX-Redirect"] == channel
+    assert act(place.worker, other, v_f3="x").headers["HX-Redirect"] == channel
+    assert act(place.worker, other, "cancel").headers["HX-Redirect"] == f"/flows/{other}"
+    # 반려도 목록으로 돌아간다.
+    act(place.worker, other, v_f3="x")
+    done(place.reviewer, other, v_f5="검토")
+    rejected = act(place.final, other, "reject", reason="안 됨")
+    assert rejected.headers["HX-Redirect"] == channel
+
+
+def test_assignee_without_channel_goes_to_todo(place: Place) -> None:
+    post = submitted(place)
+    execute(PermissionGrant.__table__.delete().where(PermissionGrant.subject_id == place.worker.id))
+    assert act(place.worker, post, v_f3="작업").headers["HX-Redirect"] == "/todo"
+
+
+def test_process_and_review_assignees_cannot_change_people(place: Place) -> None:
+    process_key = step_of(place, "process")["key"]
+    post = submitted(place, **{f"p_{process_key}": [place.writer.id]})
+    # 등록자도 자기를 처리자로 정했으면 담당자를 바꾸지 못한다.
+    assert change(place.writer, post, 2, place.reader).status_code == 409
+    for user in (place.worker, place.reviewer):
+        assert change(user, post, 2, place.reader).status_code == 409
+    page = browser(place.writer).get(f"/flows/{post}").text
+    assert f"/flows/{post}/assignees" not in page
+    # 확정자에게 부탁하면 확정자가 바꾼다.
+    assert change(place.final, post, 2, place.reader).status_code == 200
+    # 처리자는 보완 요청으로 등록자에게 돌려보낼 수 있고, 채널 목록으로 돌아간다.
+    back = act(place.writer, post, "return", target=0, reason="담당자를 다시 정해 주세요")
+    assert back.headers["HX-Redirect"] == f"/channels/{place.channel.id}"
+
+
+def test_reviewer_who_is_also_middle_confirmer_cannot_change() -> None:
+    place = make_place(middle_steps())
+    keys = [step["key"] for step in definition(place).steps]
+    post = submitted(place, **{f"p_{keys[2]}": place.reviewer.id})
+    assert change(place.reviewer, post, 1, place.reader).status_code == 409

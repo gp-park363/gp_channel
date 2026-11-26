@@ -515,3 +515,6 @@ a.button.soft { background: var(--accent-soft); color: var(--accent-soft-text); 
 .flow-item-more { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
 .flow-item-more .wide { grid-column: 1 / -1; }
 .flow-warning { color: var(--danger); font-size: 13px; }
+#flow-assignees summary { cursor: pointer; }
+.flow-change { margin-top: 14px; }
+.flow-change + .flow-change { border-top: 1px solid var(--fill); padding-top: 14px; }

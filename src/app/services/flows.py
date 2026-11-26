@@ -324,7 +324,7 @@ class FlowDoc:
     def completions(self) -> dict[int, list[FlowTask]]:
         """지금도 유효한 완료. 되돌아가 다시 한 단계는 마지막 회차만 유효하다.
 
-        확정 단계가 돌려보내 잠긴 완료는 그대로 남고, 다시 한 완료는 그 뒤에 추가된다.
+        보완 요청으로 잠긴 완료는 그대로 남고, 다시 한 완료는 그 뒤에 추가된다.
         """
         item = self.item
         found: dict[int, list[FlowTask]] = {}
@@ -474,8 +474,13 @@ async def check_picks(
     given: Mapping[str, Sequence[int]],
     *,
     require: bool,
+    kept: Mapping[str, Sequence[int]] | None = None,
 ) -> dict[str, list[int]]:
-    """지정 범위를 서버에서 다시 검사한다. require면 단계를 끝까지 맡을 사람이 있는지도 본다."""
+    """지정 범위를 서버에서 다시 검사한다. require면 단계를 끝까지 맡을 사람이 있는지도 본다.
+
+    kept는 등록자가 바꿀 수 없어 그대로 두는 담당자(확정자, 건에서 바꾼 고정 담당자)다.
+    """
+    kept = kept or {}
     picks: dict[str, list[int]] = {}
     assigned: dict[int, set[int]] = {}
     listed = await listed_people(session, channel.id)
@@ -487,6 +492,10 @@ async def check_picks(
         if step["kind"] == "register":
             continue
         label = step["label"]
+        if step["key"] in kept:
+            picks[step["key"]] = list(kept[step["key"]])
+            assigned[number] = set(kept[step["key"]]) & await active_ids(session, kept[step["key"]])
+            continue
         if not is_picked(step):
             assigned[number] = set(listed.get(step["key"], [])) & active
             continue
@@ -543,10 +552,7 @@ async def start_step(session: AsyncSession, doc: FlowDoc, step_no: int) -> set[i
     """단계를 시작하고 차례가 온 사람을 돌려준다. 맡을 사람이 없으면 건이 멈춘다."""
     step = doc.steps[step_no]
     doc.item.current_step = step_no
-    if is_picked(step):
-        people = doc.picks.get(step["key"], [])
-    else:
-        people = (await listed_people(session, doc.channel.id)).get(step["key"], [])
+    people = await planned(session, doc, step)
     ready = await active_ids(session, people) - doc.excluded(step_no)
     tasks = [
         FlowTask(
@@ -563,6 +569,13 @@ async def start_step(session: AsyncSession, doc: FlowDoc, step_no: int) -> set[i
     await session.flush()
     doc.tasks += tasks
     return ready
+
+
+async def planned(session: AsyncSession, doc: FlowDoc, step: Step) -> list[int]:
+    """단계를 맡을 사람. 등록자가 지정했거나 이 건에서 바꾼 사람, 없으면 채널의 고정 담당자다."""
+    if is_picked(step) or step["key"] in doc.picks:
+        return doc.picks.get(step["key"], [])
+    return (await listed_people(session, doc.channel.id)).get(step["key"], [])
 
 
 def audit(session: AsyncSession, doc: FlowDoc, actor: User, action: str, **detail: object) -> None:
@@ -704,7 +717,7 @@ def return_targets(doc: FlowDoc) -> list[int]:
 
 
 def lock_written(doc: FlowDoc) -> None:
-    """확정 단계가 돌려보낼 때 앞 단계에 적은 내용을 모두 잠근다.
+    """보완 요청으로 돌려보낼 때 앞 단계에 적은 내용을 모두 잠근다.
 
     돌려보낸 단계만 잠그면 그 단계에서 더 앞으로 돌려보내 고칠 수 있다.
     """
@@ -725,7 +738,6 @@ async def send_back(
         raise FlowError("돌려보낼 단계를 확인해 주세요.")
     now = touch(doc)
     changed = waiting_ids(doc) | {doc.item.registrant_id}
-    locking = doc.step["kind"] == "confirm"
     audit(
         session,
         doc,
@@ -734,10 +746,9 @@ async def send_back(
         step=doc.step["label"],
         return_to=doc.steps[target]["label"],
         reason=reason,
-        locked=locking,
+        locked=True,
     )
-    if locking:
-        lock_written(doc)
+    lock_written(doc)
     for row in doc.current_tasks:
         if row.status == "waiting":
             row.status = "returned" if row is task else "skipped"
@@ -873,6 +884,141 @@ async def discard(session: AsyncSession, doc: FlowDoc, actor: User, reason: str)
     return changed
 
 
+def changeable_steps(doc: FlowDoc, user_id: int, assigned: Mapping[int, set[int]]) -> list[int]:
+    """이 사람이 담당자를 바꿀 수 있는 단계. 아직 끝나지 않은 단계만이다.
+
+    등록자는 처리·검토 단계만, 확정자는 자기 확정 단계보다 앞의 처리·검토 단계만 바꾼다.
+    확정자는 바꾸지 않는다. 중간 확정자만 최종 확정자가 바꾼다.
+    처리자·검토자로 지정된 사람은 등록자여도 바꾸지 못한다.
+    assigned는 단계 번호별로 맡았거나 맡을 사람이다.
+    """
+    item = doc.item
+    if item.status == "in_progress":
+        start = item.current_step
+    elif item.status == "returned":
+        start = 1
+    else:
+        return []
+    # 처리자·검토자는 바꾸지 않는다. 필요하면 보완 요청을 하거나 확정자에게 부탁한다.
+    if any(
+        user_id in people
+        for number, people in assigned.items()
+        if doc.steps[number]["kind"] != "confirm"
+    ):
+        return []
+    own = max(
+        (
+            number
+            for number, people in assigned.items()
+            if user_id in people and doc.steps[number]["kind"] == "confirm"
+        ),
+        default=0,
+    )
+    final = user_id in assigned.get(doc.last, set())
+    result = []
+    for number in range(start, len(doc.steps)):
+        if doc.steps[number]["kind"] == "confirm":
+            allowed = final and number < doc.last
+        else:
+            allowed = number < own or user_id == item.registrant_id
+        if allowed:
+            result.append(number)
+    return result
+
+
+async def assigned_people(session: AsyncSession, doc: FlowDoc) -> dict[int, set[int]]:
+    """단계마다 맡았거나 맡을 사람. 등록 단계는 뺀다."""
+    found: dict[int, set[int]] = {}
+    for number, step in enumerate(doc.steps):
+        if step["kind"] == "register":
+            continue
+        people = set(await planned(session, doc, step))
+        people |= {
+            task.assignee_id
+            for task in doc.tasks
+            if task.step_no == number and task.status not in ("replaced", "voided")
+        }
+        found[number] = people
+    return found
+
+
+async def current_people(session: AsyncSession, doc: FlowDoc, step_no: int) -> list[int]:
+    """화면에 보여 줄 단계의 담당자. 진행 중인 단계는 차례를 기다리는 사람이다."""
+    if doc.item.status == "in_progress" and step_no == doc.item.current_step:
+        return [task.assignee_id for task in doc.current_tasks if task.status == "waiting"]
+    return await planned(session, doc, doc.steps[step_no])
+
+
+async def change_candidates(session: AsyncSession, doc: FlowDoc, step_no: int) -> set[int]:
+    step = doc.steps[step_no]
+    allowed = await step_candidates(session, doc.channel, step)
+    if step["kind"] == "process" and step.get("assign") == "registrant":
+        allowed |= await active_ids(session, [doc.item.registrant_id])
+    return allowed - doc.excluded(step_no)
+
+
+async def change_people(
+    session: AsyncSession,
+    doc: FlowDoc,
+    actor: User,
+    step_no: int,
+    people: Sequence[int],
+    reason: str,
+) -> set[int]:
+    """등록자나 확정자가 아직 끝나지 않은 단계의 담당자를 바꾼다."""
+    if step_no not in changeable_steps(doc, actor.id, await assigned_people(session, doc)):
+        raise FlowError("이 단계의 담당자는 바꿀 수 없습니다.", stale=True)
+    step = doc.steps[step_no]
+    chosen = list(dict.fromkeys(people))
+    if not chosen:
+        raise FlowError(f"{step['label']}: 담당자를 한 명 이상 지정해 주세요.")
+    if len(chosen) > MAX_PEOPLE:
+        raise FlowError(f"{step['label']}: 담당자는 {MAX_PEOPLE}명까지입니다.")
+    before = await current_people(session, doc, step_no)
+    if not set(chosen) - set(before) <= await change_candidates(session, doc, step_no):
+        raise FlowError(f"{step['label']}: 맡을 수 없는 사람이 있습니다. 다시 골라 주세요.")
+    if sorted(chosen) == sorted(before):
+        raise FlowError("바뀐 담당자가 없습니다.")
+    now = touch(doc)
+    changed = set(before) | set(chosen)
+    keep = set(chosen)
+    if doc.item.status == "in_progress" and step_no == doc.item.current_step:
+        finished = [task.assignee_id for task in doc.current_tasks if task.status == "done"]
+        for task in doc.current_tasks:
+            if task.status == "waiting" and task.assignee_id not in keep:
+                task.status = "replaced"
+                task.acted_at = now
+                task.comment = reason or None
+        await session.flush()
+        for user_id in chosen:
+            if user_id not in before and user_id not in finished:
+                task = FlowTask(
+                    item_id=doc.item.id,
+                    round=doc.item.round,
+                    step_no=step_no,
+                    assignee_id=user_id,
+                    status="waiting",
+                    values={},
+                )
+                session.add(task)
+                doc.tasks.append(task)
+        keep |= set(finished)
+    # 되돌아와 다시 할 때도 바꾼 담당자가 맡는다.
+    await save_picks(session, doc, {**doc.picks, step["key"]: sorted(keep)})
+    audit(
+        session,
+        doc,
+        actor,
+        "reassign",
+        step=step["label"],
+        before=before,
+        after=chosen,
+        reason=reason,
+    )
+    await session.flush()
+    return changed
+
+
 async def reassign_candidates(session: AsyncSession, doc: FlowDoc) -> set[int]:
     if doc.item.status != "in_progress":
         return set()
@@ -918,11 +1064,10 @@ async def reassign(
     )
     session.add(task)
     doc.tasks.append(task)
-    if is_picked(doc.step):
-        # 되돌아와 다시 할 때도 새 담당자가 맡는다.
-        key = doc.step["key"]
-        people = [one for one in doc.picks.get(key, []) if one != old_id]
-        await save_picks(session, doc, {**doc.picks, key: [*people, new_id]})
+    # 되돌아와 다시 할 때도 새 담당자가 맡는다.
+    key = doc.step["key"]
+    people = [one for one in await planned(session, doc, doc.step) if one != old_id]
+    await save_picks(session, doc, {**doc.picks, key: list(dict.fromkeys([*people, new_id]))})
     audit(
         session,
         doc,

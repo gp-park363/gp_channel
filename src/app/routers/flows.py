@@ -353,14 +353,19 @@ def initial_values(fields: list[dict]) -> dict:
 
 
 async def pick_rows(
-    session: AsyncSession, definition: FlowDefinition, channel: Channel, picks: dict
+    session: AsyncSession,
+    definition: FlowDefinition,
+    channel: Channel,
+    picks: dict,
+    kept: frozenset[str] = frozenset(),
 ) -> list[dict[str, object]]:
-    """등록 화면의 단계별 담당자. 고정이면 이름만, 등록자 지정이면 고르는 칸이다."""
+    """등록 화면의 단계별 담당자. 등록자 지정이면 고르는 칸, 고정이거나 바꿀 수 없으면 이름만."""
     listed = await engine.listed_people(session, channel.id)
     rows = []
     for step in definition.steps[1:]:
-        picked = is_picked(step)
-        ids = picks.get(step["key"], []) if picked else listed.get(step["key"], [])
+        picked = is_picked(step) and step["key"] not in kept
+        own = is_picked(step) or step["key"] in picks
+        ids = picks.get(step["key"], []) if own else listed.get(step["key"], [])
         rows.append(
             {
                 "key": step["key"],
@@ -414,7 +419,9 @@ async def form_page(
                 values,
             ),
             "locked_sections": await locked_sections(session, doc) if locked else [],
-            "picks": await pick_rows(session, definition, channel, picks),
+            "picks": await pick_rows(
+                session, definition, channel, picks, frozenset(await kept_picks(session, doc))
+            ),
             "dropped": dropped or [],
             "people_url": f"/flows/{post.id}/people"
             if returned
@@ -500,6 +507,20 @@ async def store_values(
     return values
 
 
+async def kept_picks(session: AsyncSession, doc: FlowDoc | None) -> dict[str, list[int]]:
+    """한 번 제출한 건에서 등록자가 바꿀 수 없는 담당자.
+
+    확정자는 반려되어 돌아와도 바꾸지 못한다. 고정 단계를 이 건에서 바꿨으면 그 사람을 둔다.
+    """
+    if doc is None or doc.item.submitted_at is None:
+        return {}
+    return {
+        step["key"]: await engine.planned(session, doc, step)
+        for step in doc.steps[1:]
+        if step["kind"] == "confirm" or (not is_picked(step) and step["key"] in doc.picks)
+    }
+
+
 def read_picks(form: RawForm, definition: FlowDefinition) -> dict[str, list[int]]:
     picks = {}
     for step in definition.steps[1:]:
@@ -546,6 +567,7 @@ async def save_item(
             doc.steps,
             read_picks(submitted.form, doc.definition),
             require=submitting,
+            kept=await kept_picks(session, doc),
         )
     except FlowError as error:
         raise failed(error) from error
@@ -605,7 +627,7 @@ async def create_flow(
         submitting=submitted.form.get("action") == "submit",
     )
     await session.commit()
-    return Response(headers={"HX-Redirect": f"/flows/{post.id}"})
+    return await after_save(authz, doc)
 
 
 async def open_doc(
@@ -685,7 +707,21 @@ async def edit_flow(
         submitting = submitted.form.get("action") == "submit"
     await save_item(session, doc, authz.user, submitted, submitting=submitting)
     await session.commit()
-    return Response(headers={"HX-Redirect": f"/flows/{doc.post.id}"})
+    return await after_save(authz, doc)
+
+
+async def after_save(authz: Authorizer, doc: FlowDoc) -> Response:
+    """임시저장은 건으로 돌아가 이어서 쓰고, 제출하면 채널 목록으로 돌아간다."""
+    if doc.item.status == "draft":
+        return Response(headers={"HX-Redirect": f"/flows/{doc.post.id}"})
+    return Response(headers={"HX-Redirect": await back_to_channel(authz, doc)})
+
+
+async def back_to_channel(authz: Authorizer, doc: FlowDoc) -> str:
+    """채널 목록 주소. 그 건만 맡아 채널에 들어갈 수 없으면 내 할 일로 보낸다."""
+    if (await authz.access(doc.channel)).can_enter:
+        return f"/channels/{doc.channel.id}"
+    return "/todo"
 
 
 @router.post("/flows/{post_id}/delete")
@@ -845,6 +881,7 @@ async def flow_page(
             "v": view,
             "flow": view.flow,
             "action": await action_view(session, doc, authz.user.id),
+            "changes": await change_rows(session, doc, authz.user.id),
             "source": source,
             "raise_targets": raise_targets,
             "is_channel_manager": await authz.is_manager(doc.channel),
@@ -856,14 +893,71 @@ async def flow_page(
     )
 
 
+async def change_rows(session: AsyncSession, doc: FlowDoc, user_id: int) -> list[dict[str, object]]:
+    """이 사람이 담당자를 바꿀 수 있는 단계와 지금 담당자."""
+    numbers = engine.changeable_steps(doc, user_id, await engine.assigned_people(session, doc))
+    return [
+        {
+            "step_no": number,
+            "label": doc.steps[number]["label"],
+            "role": ROLE_LABELS[doc.steps[number]["kind"]],
+            "current": doc.item.status == "in_progress" and number == doc.item.current_step,
+            "people": await people_rows(session, await engine.current_people(session, doc, number)),
+        }
+        for number in numbers
+    ]
+
+
+@router.get("/flows/{post_id}/assignee-people")
+async def assignee_people(
+    post_id: int,
+    session: SessionDep,
+    authz: AuthzDep,
+    step_no: Annotated[int, Query(ge=1, le=99)],
+    q: Search = "",
+) -> list[dict[str, object]]:
+    doc, _ = await open_doc(session, authz, post_id)
+    allowed = engine.changeable_steps(
+        doc, authz.user.id, await engine.assigned_people(session, doc)
+    )
+    if step_no not in allowed:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "이 단계의 담당자는 바꿀 수 없습니다.")
+    within = await engine.change_candidates(session, doc, step_no)
+    within |= set(await engine.current_people(session, doc, step_no))
+    return await search_people(session, q, within=within)
+
+
+@router.post("/flows/{post_id}/assignees")
+async def change_assignees(
+    post_id: int,
+    session: SessionDep,
+    authz: AuthzDep,
+    step_no: Annotated[int, Form(ge=1, le=99)],
+    people: Annotated[list[int] | None, Form()] = None,
+    reason: Reason = "",
+) -> Response:
+    """등록자는 처리·검토 단계를, 확정자는 자기 단계보다 앞 단계를 바꾼다."""
+    doc, _ = await open_doc(session, authz, post_id, lock=True)
+    try:
+        changed = await engine.change_people(
+            session, doc, authz.user, step_no, people or [], reason.strip()
+        )
+    except FlowError as error:
+        raise failed(error) from error
+    return await respond(session, doc, authz.user, changed)
+
+
 # 단계 처리
 
 
-async def respond(session: AsyncSession, doc: FlowDoc, actor: User, changed: set[int]) -> Response:
+async def respond(
+    session: AsyncSession, doc: FlowDoc, actor: User, changed: set[int], to: str | None = None
+) -> Response:
+    """to가 없으면 건 화면을 다시 연다."""
     await publish(session, Event("updated", doc.channel.id, doc.post.id, actor.id))
     await publish_counts(session, changed | {actor.id})
     await session.commit()
-    return Response(headers={"HX-Redirect": f"/flows/{doc.post.id}"})
+    return Response(headers={"HX-Redirect": to or f"/flows/{doc.post.id}"})
 
 
 async def turn(
@@ -923,7 +1017,7 @@ async def complete(
             for key, value in row.values.items():
                 if isinstance(value, list):
                     previous[key] = [*previous.get(key, []), *value]
-    # 확정 단계가 돌려보낸 뒤에는 추가한 내용만 받는다. 잠긴 값은 화면에서 오지 않는다.
+    # 돌려보낸 뒤에는 추가한 내용만 받는다. 잠긴 값은 화면에서 오지 않는다.
     fields = relaxed(fields, doc.written(authz.user.id))
     values = await store_values(
         session,
@@ -942,7 +1036,9 @@ async def complete(
         comment=comment,
         finish=decision == "finish",
     )
-    return await respond(session, doc, authz.user, changed)
+    # 처리·검토·확정을 마치면 채널 목록으로 돌아간다.
+    to = await back_to_channel(authz, doc)
+    return await respond(session, doc, authz.user, changed, to)
 
 
 @router.post("/flows/{post_id}/return")
@@ -963,7 +1059,7 @@ async def send_back(
         )
     except FlowError as error:
         raise failed(error) from error
-    return await respond(session, doc, authz.user, changed)
+    return await respond(session, doc, authz.user, changed, await back_to_channel(authz, doc))
 
 
 @router.post("/flows/{post_id}/reject")
@@ -980,7 +1076,7 @@ async def reject(
     if doc.step["kind"] != "confirm":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "확정 단계에서만 반려할 수 있습니다.")
     changed = await engine.reject(session, doc, doc.my_task(authz.user.id), authz.user, reason)
-    return await respond(session, doc, authz.user, changed)
+    return await respond(session, doc, authz.user, changed, await back_to_channel(authz, doc))
 
 
 @router.post("/flows/{post_id}/cancel")
@@ -1033,6 +1129,8 @@ async def reassign_people(
     post_id: int, session: SessionDep, user: CurrentUser, q: Search = ""
 ) -> list[dict[str, object]]:
     doc = await managed_doc(session, user, post_id)
+    if not await engine.stalled(session, doc):
+        return []
     return await search_people(session, q, within=await engine.reassign_candidates(session, doc))
 
 
@@ -1049,6 +1147,9 @@ async def reassign(
     doc = await managed_doc(session, user, post_id, lock=True)
     if doc.item.status != "in_progress":
         raise conflict("진행 중인 건만 담당자를 바꿀 수 있습니다.")
+    # 담당자는 등록자와 확정자가 바꾼다. 관리자는 진행이 멈춘 건만 바꾼다.
+    if not await engine.stalled(session, doc):
+        raise conflict("진행이 멈춘 건만 관리자가 담당자를 바꿀 수 있습니다.")
     try:
         changed = await engine.reassign(session, doc, user, old_id or None, new_id, reason)
     except FlowError as error:

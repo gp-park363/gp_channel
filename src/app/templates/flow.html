@@ -1,6 +1,6 @@
 {% extends "channel_page.html" %}
 {% from "partials/icons.html" import icon %}
-{% from "partials/flow_fields.html" import flow_fields %}
+{% from "partials/flow_fields.html" import flow_fields, people_picker %}
 {% block title %}{{ v.post.title }} · 바로채널{% endblock %}
 {% block content %}
 <a class="back" href="/channels/{{ channel.id }}">{{ icon("back") }}{{ channel.name }}</a>
@@ -13,7 +13,7 @@
     <input type="hidden" name="round" value="{{ action.round }}">
     <input type="hidden" name="step_no" value="{{ action.step_no }}">
     <input type="hidden" name="seen" value="{{ action.seen }}">
-    {% if action.add_only %}<p class="muted">확정 단계에서 돌려보낸 건입니다. 위에 이미 작성한 내용은 고칠 수 없고, 여기에 적은 내용이 추가됩니다.</p>{% endif %}
+    {% if action.add_only %}<p class="muted">돌려보낸 건입니다. 위에 이미 작성한 내용은 고칠 수 없고, 여기에 적은 내용이 추가됩니다.</p>{% endif %}
     {{ flow_fields(action.inputs, people_url) }}
     <label><span>의견 <small class="muted">선택</small></span><textarea name="comment" rows="2" maxlength="1000">{{ action.comment }}</textarea></label>
     {% if action.middle %}
@@ -34,7 +34,7 @@
       <label>돌려보낼 단계
         <select name="target">{% for number, label in action.targets %}<option value="{{ number }}">{{ number + 1 }}. {{ label }}</option>{% endfor %}</select>
       </label>
-      <p class="muted">고른 단계부터 차례대로 다시 진행합니다.{% if action.can_reject %} 지금까지 작성한 내용은 잠겨, 앞 단계에서는 고치지 못하고 추가만 합니다.{% endif %}</p>
+      <p class="muted">고른 단계부터 차례대로 다시 진행합니다. 지금까지 작성한 내용은 잠겨, 앞 단계에서는 고치지 못하고 추가만 합니다.</p>
       <textarea name="reason" rows="2" maxlength="1000" required placeholder="보완할 내용" aria-label="보완할 내용"></textarea>
       <button>보완 요청</button>
     </form>
@@ -52,6 +52,23 @@
   {% endif %}
 </section>
 {% endif %}
+{% if changes %}
+<section class="section stack" id="flow-assignees">
+  <details>
+    <summary><strong>담당자 변경</strong> <span class="muted">{{ changes|map(attribute="label")|join(", ") }}</span></summary>
+    <p class="muted">아직 끝나지 않은 단계의 담당자를 바꿉니다. 등록자는 처리·검토 단계를, 확정자는 자기 단계보다 앞의 처리·검토 단계를 바꿀 수 있습니다. 중간 확정자는 최종 확정자만 바꿉니다. 처리자·검토자는 바꿀 수 없으니, 필요하면 보완 요청을 하거나 확정자에게 요청합니다.</p>
+    {% for row in changes %}
+    <form class="stack flow-change" hx-post="/flows/{{ v.post.id }}/assignees" hx-swap="none">
+      <input type="hidden" name="step_no" value="{{ row.step_no }}">
+      <strong>{{ row.label }} <span class="muted">{{ row.role }}{% if row.current %} · 지금 차례{% endif %}</span></strong>
+      {{ people_picker("people", "/flows/%d/assignee-people?step_no=%d" % (v.post.id, row.step_no), row.people, 20) }}
+      <input name="reason" maxlength="1000" placeholder="바꾸는 이유 (선택)" aria-label="{{ row.label }} 담당자를 바꾸는 이유">
+      <div class="row"><button>담당자 저장</button></div>
+    </form>
+    {% endfor %}
+  </details>
+</section>
+{% endif %}
 {% if flow.can_raise %}
 <section class="section stack">
   <h2>결재 올리기</h2>
@@ -61,6 +78,6 @@
   {% else %}<p class="muted">쓰기 권한이 있는 결재 채널이 없습니다.</p>{% endif %}
 </section>
 {% endif %}
-{% if is_channel_manager and flow.item.status in ("in_progress", "returned") %}<p class="muted"><a href="/channels/{{ channel.id }}/flow#open-items">담당자 변경은 워크플로우 설정에서 합니다.</a></p>{% endif %}
+{% if is_channel_manager and flow.stalled %}<p class="muted"><a href="/channels/{{ channel.id }}/flow#open-items">진행이 멈춘 건입니다. 워크플로우 설정에서 담당자를 바꾸거나 폐기합니다.</a></p>{% endif %}
 {% if show_thread %}<div hidden data-auto-thread="/posts/{{ v.post.id }}/thread"></div>{% endif %}
 {% endblock %}
