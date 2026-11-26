@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import SessionDep
 from app.models import Department, User, UserDepartment
 from app.services.admin import is_system_admin
+from app.services.login import session_valid
 from app.services.permissions import Authorizer
 
 
@@ -29,7 +30,7 @@ async def primary_department_name(session: AsyncSession, user_id: int) -> str:
 async def current_user(request: Request, session: SessionDep) -> User:
     user_id = request.session.get("user_id")
     user = await session.get(User, user_id) if user_id else None
-    if user is None or not user.is_active:
+    if user is None or not user.is_active or not session_valid(request.session, user):
         request.session.clear()
         raise LoginRequired
     # 시스템 관리자는 로그인하면 바로 관리자 모드다.

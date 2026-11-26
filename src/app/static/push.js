@@ -2,7 +2,8 @@
 (() => {
   const frame = document.querySelector("[data-push-user]");
   if (!frame) return;
-  const user = frame.dataset.pushUser;
+  // 비밀번호를 바꾸면 서버가 기기를 지우므로 세션 버전이 바뀌면 다시 등록한다.
+  const user = `${frame.dataset.pushUser}:${frame.dataset.pushVer}`;
   const publicKey = frame.dataset.pushKey;
   const DEVICE = "baro-push-device";
   let endpoint = "";

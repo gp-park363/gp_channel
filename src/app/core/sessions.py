@@ -1,9 +1,13 @@
+import time
+
 import itsdangerous
 from itsdangerous.encoding import base64_encode, int_to_bytes, want_bytes
 from starlette.middleware.sessions import SessionMiddleware
-from starlette.types import ASGIApp
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 CLOCK_TOLERANCE_SECONDS = 5
+# 쓰는 동안 하루에 한 번 쿠키를 다시 발급한다. 쿠키의 유효 기간은 마지막 발급부터 센다.
+REFRESH_SECONDS = 24 * 60 * 60
 
 
 class BackdatedSigner(itsdangerous.TimestampSigner):
@@ -20,7 +24,25 @@ class BackdatedSigner(itsdangerous.TimestampSigner):
         return stamped + separator + self.get_signature(stamped)
 
 
+def refreshing(app: ASGIApp) -> ASGIApp:
+    """로그인한 세션에 마지막 발급 시각을 남긴다. 하루가 지나면 값을 바꿔 쿠키를 다시 받게 한다.
+
+    Starlette는 세션 값이 바뀔 때만 쿠키를 보낸다.
+    그대로 두면 쓰는 중에도 처음 로그인부터 세어 끊긴다.
+    """
+
+    async def wrapped(scope: Scope, receive: Receive, send: Send) -> None:
+        session = scope.get("session")
+        if session and session.get("user_id"):
+            now = int(time.time())
+            if now - session.get("issued", 0) >= REFRESH_SECONDS:
+                session["issued"] = now
+        await app(scope, receive, send)
+
+    return wrapped
+
+
 class ClockTolerantSessionMiddleware(SessionMiddleware):
     def __init__(self, app: ASGIApp, secret_key: str, **options: object) -> None:
-        super().__init__(app, secret_key, **options)
+        super().__init__(refreshing(app), secret_key, **options)
         self.signer = BackdatedSigner(secret_key)

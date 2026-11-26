@@ -6,8 +6,11 @@ from anyio import CancelScope
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
+from app.core.db import SessionLocal
 from app.core.deps import LoginRequired
+from app.models import User
 from app.services.delivery import count_state, messages_for, still_allowed
+from app.services.login import session_valid
 from app.services.realtime import hub
 
 router = APIRouter(tags=["events"], include_in_schema=False)
@@ -26,7 +29,7 @@ def format_event(name: str, html: str) -> str:
     return f"event: {name}\n{data}\n\n"
 
 
-async def stream(user_id: int, channel_id: int) -> AsyncGenerator[str]:
+async def stream(user_id: int, channel_id: int, version: int | None = None) -> AsyncGenerator[str]:
     queue = hub.subscribe(channel_id)
     try:
         yield ": connected\n\n"
@@ -35,7 +38,7 @@ async def stream(user_id: int, channel_id: int) -> AsyncGenerator[str]:
                 event = await asyncio.wait_for(queue.get(), HEARTBEAT_SECONDS)
             except TimeoutError:
                 # 로드밸런서가 연결을 끊지 않게 하고, 권한 회수도 이때 다시 확인한다.
-                if not await uninterrupted(still_allowed(user_id, channel_id)):
+                if not await uninterrupted(still_allowed(user_id, channel_id, version)):
                     return
                 yield ": ping\n\n"
                 continue
@@ -50,14 +53,14 @@ async def stream(user_id: int, channel_id: int) -> AsyncGenerator[str]:
         hub.unsubscribe(channel_id, queue)
 
 
-async def count_stream(user_id: int) -> AsyncGenerator[str]:
+async def count_stream(user_id: int, version: int | None = None) -> AsyncGenerator[str]:
     """내 할 일 개수와 채널별 새 글 수를 보낸다. 접속하면 바로 한 번 보내고, 바뀌면 다시 보낸다."""
     queue = hub.subscribe_user(user_id)
     sent_todo: int | None = None
     sent_unread: str | None = None
     try:
         while True:
-            state = await uninterrupted(count_state(user_id))
+            state = await uninterrupted(count_state(user_id, version))
             if state is None:
                 return
             hub.watch(queue, state.watched)
@@ -83,13 +86,23 @@ async def count_stream(user_id: int) -> AsyncGenerator[str]:
         hub.unsubscribe_user(user_id, queue)
 
 
-@router.get("/events/me")
-async def my_events(request: Request) -> StreamingResponse:
+async def signed_in(request: Request) -> tuple[int, int]:
+    """응답이 오래 유지되므로 DB 세션 의존성 대신 짧게 확인하고 연결을 돌려준다."""
     user_id = request.session.get("user_id")
     if not user_id:
         raise LoginRequired
+    async with SessionLocal() as session:
+        user = await session.get(User, user_id)
+        if user is None or not user.is_active or not session_valid(request.session, user):
+            raise LoginRequired
+        return user.id, user.session_version
+
+
+@router.get("/events/me")
+async def my_events(request: Request) -> StreamingResponse:
+    user_id, version = await signed_in(request)
     return StreamingResponse(
-        count_stream(user_id),
+        count_stream(user_id, version),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -98,13 +111,11 @@ async def my_events(request: Request) -> StreamingResponse:
 @router.get("/events/{channel_id}")
 async def events(channel_id: int, request: Request) -> StreamingResponse:
     """응답이 오래 유지되므로 DB 세션 의존성을 쓰지 않고 필요할 때만 연결을 빌린다."""
-    user_id = request.session.get("user_id")
-    if not user_id:
-        raise LoginRequired
-    if not await still_allowed(user_id, channel_id):
+    user_id, version = await signed_in(request)
+    if not await still_allowed(user_id, channel_id, version):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "채널을 찾을 수 없습니다.")
     return StreamingResponse(
-        stream(user_id, channel_id),
+        stream(user_id, channel_id, version),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

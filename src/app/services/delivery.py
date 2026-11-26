@@ -26,11 +26,18 @@ from app.services.realtime import Event
 Message = tuple[str, str]
 
 
-async def still_allowed(user_id: int, channel_id: int) -> bool:
+def signed_out(user: User | None, version: int | None) -> bool:
+    """연결을 맺은 뒤 비활성이 되거나 모든 기기에서 로그아웃했으면 끊는다."""
+    if user is None or not user.is_active:
+        return True
+    return version is not None and user.session_version != version
+
+
+async def still_allowed(user_id: int, channel_id: int, version: int | None = None) -> bool:
     async with SessionLocal() as session:
         user = await session.get(User, user_id)
         channel = await session.get(Channel, channel_id)
-        if user is None or not user.is_active or channel is None:
+        if signed_out(user, version) or channel is None:
             return False
         return (await Authorizer(session, user).access(channel)).can_enter
 
@@ -65,14 +72,14 @@ class CountState:
     watched: frozenset[int]
 
 
-async def count_state(user_id: int) -> CountState | None:
+async def count_state(user_id: int, version: int | None = None) -> CountState | None:
     """None이면 수신 자격을 잃은 것이므로 연결을 끊는다."""
     todo = await todo_count(user_id)
     if todo is None:
         return None
     async with SessionLocal() as session:
         user = await session.get(User, user_id)
-        if user is None or not user.is_active:
+        if signed_out(user, version):
             return None
         navigation = await build_navigation(Authorizer(session, user))
     watched = frozenset(channel.id for item in navigation for channel in item.channels)

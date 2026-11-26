@@ -2,6 +2,7 @@ import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
+from urllib.parse import urlencode, urlsplit
 
 import uvicorn
 from botocore.exceptions import BotoCoreError, ClientError
@@ -35,6 +36,7 @@ from app.routers import (
     work,
 )
 from app.services import push
+from app.services.login import safe_next
 from app.services.push_worker import worker
 from app.services.realtime import hub
 from app.services.storage import ensure_bucket
@@ -76,10 +78,20 @@ class CachedStaticFiles(StaticFiles):
         return response
 
 
+def login_url(target: str) -> str:
+    target = safe_next(target)
+    return "/login" if target == "/" else f"/login?{urlencode({'next': target})}"
+
+
 async def login_required(request: Request, _: LoginRequired) -> Response:
+    """로그인한 뒤 보던 화면으로 돌아가게 한다. 화면이 아닌 요청(SSE 등)은 주소를 넘기지 않는다."""
     if request.headers.get("HX-Request"):
-        return Response(headers={"HX-Redirect": "/login"})
-    return RedirectResponse("/login", status.HTTP_303_SEE_OTHER)
+        current = urlsplit(request.headers.get("HX-Current-URL", ""))
+        page = current.path + (f"?{current.query}" if current.query else "")
+        return Response(headers={"HX-Redirect": login_url(page)})
+    wants_page = request.method == "GET" and "text/html" in request.headers.get("accept", "")
+    target = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+    return RedirectResponse(login_url(target if wants_page else "/"), status.HTTP_303_SEE_OTHER)
 
 
 def create_app() -> FastAPI:

@@ -28,6 +28,8 @@ class User(Base):
     pin_hash: Mapped[str | None] = mapped_column(String(255))
     pin_failed_count: Mapped[int] = mapped_column(Integer, default=0)
     pin_locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # 올리면 이 사람의 다른 기기 세션이 모두 끊긴다. 비밀번호 변경, 모든 기기에서 로그아웃.
+    session_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     # 요청마다 current_user가 정한다. 저장하지 않으며 기본값은 관리 권한 없음이다.

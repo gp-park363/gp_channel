@@ -32,6 +32,7 @@
   {% if push_enabled() %}
   <a class="menu-row" href="/account/notifications"><span class="menu-icon">{{ icon("settings") }}</span><span class="menu-text"><strong>알림</strong><small>이 기기에서 알림 받기, 받을 알림 고르기</small></span>{{ icon("chevron") }}</a>
   {% endif %}
+  <button class="menu-row" hx-post="/account/logout-all" hx-confirm="이 기기를 포함해 모든 기기에서 로그아웃할까요? 휴대폰을 잃어버렸을 때 씁니다. 알림도 모두 끊깁니다."><span class="menu-icon">{{ icon("lock") }}</span><span class="menu-text"><strong>모든 기기에서 로그아웃</strong><small>휴대폰을 잃어버렸을 때</small></span></button>
   <button class="menu-row" hx-post="/logout"><span class="menu-icon">{{ icon("logout") }}</span><span class="menu-text"><strong>로그아웃</strong></span></button>
 </section>
 {% endblock %}

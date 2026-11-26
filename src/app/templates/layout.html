@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block body %}
-<div class="frame"{% if user is defined and user and push_enabled() %} data-push-user="{{ user.id }}" data-push-key="{{ push_public_key() }}"{% endif %}>
+<div class="frame"{% if user is defined and user and push_enabled() %} data-push-user="{{ user.id }}" data-push-ver="{{ user.session_version }}" data-push-key="{{ push_public_key() }}"{% endif %}>
   {% if user is defined and user %}
   <header class="user-bar">
     <a class="brand" href="/"><img src="{{ asset('brand/logo.svg') }}" alt="" width="26" height="26"><span class="brand-text"><span class="brand-name">{{ company_name }}</span>{% if company_name != "바로채널" %}<small class="brand-by">Powered by 바로Channel</small>{% endif %}</span></a>

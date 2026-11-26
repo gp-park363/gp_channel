@@ -33,7 +33,8 @@ class Settings(BaseSettings):
     port: int = 8000
     debug: bool = False
     secret_key: str = DEV_SECRET_KEY
-    session_max_age_seconds: int = 12 * 60 * 60
+    # 마지막으로 쓴 뒤 이 시간이 지나면 다시 로그인한다. 쓰는 동안은 하루에 한 번 연장한다.
+    session_max_age_seconds: int = 14 * 24 * 60 * 60
     # 세션 쿠키를 HTTPS에서만 보낼지. 비우면 운영 모드(debug=false)에서 켠다.
     # 사내망에서 IP와 HTTP로만 운영할 때(QNAP 1차 배포)만 false로 둔다.
     secure_cookies: bool | None = None
