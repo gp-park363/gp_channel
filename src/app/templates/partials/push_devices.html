@@ -1,0 +1,15 @@
+{% if devices %}
+<ul class="list">
+  {% for row in devices %}
+  <li class="row" data-device="{{ row.id }}">
+    <strong>{{ row.device_label or "기기" }}</strong>
+    <span class="tag blue js-this-device" hidden>이 기기</span>
+    <span class="spacer"></span>
+    <span class="muted">{{ row.last_seen_at|time }}</span>
+    <button class="link" hx-post="/account/push/devices/{{ row.id }}/delete" hx-target="closest li" hx-swap="delete" hx-confirm="이 기기로 알림을 보내지 않을까요?">빼기</button>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="muted">알림을 받는 기기가 없습니다.</p>
+{% endif %}

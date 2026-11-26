@@ -17,6 +17,7 @@ from app.core.sessions import ClockTolerantSessionMiddleware
 from app.core.templating import APP_DIR
 from app.routers import (
     admin_groups,
+    alerts,
     approvals,
     attachments,
     audit,
@@ -29,12 +30,12 @@ from app.routers import (
     pages,
     polls,
     posts,
-    push_test,
     search,
     spaces,
     work,
 )
 from app.services import push
+from app.services.push_worker import worker
 from app.services.realtime import hub
 from app.services.storage import ensure_bucket
 from app.services.work import screens
@@ -57,8 +58,11 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
         await ensure_bucket()
     except (BotoCoreError, ClientError) as error:
         logger.warning("파일 저장소를 확인하지 못했습니다: %s", error)
+    hub.on_push = worker.wake
     hub.start()
+    worker.start()
     yield
+    await worker.stop()
     await hub.stop()
     await engine.dispose()
 
@@ -121,7 +125,7 @@ def create_app() -> FastAPI:
         audit,
         attachments,
         events,
-        push_test,
+        alerts,
     ):
         application.include_router(module.router)
     application.include_router(work.hook_router)

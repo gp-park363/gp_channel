@@ -11,7 +11,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from py_vapid import Vapid02
 
 from app.core.config import get_settings
-from app.routers import push_test
+from app.routers import alerts
 from app.services import push
 from tests.conftest import Browser, add_user
 
@@ -42,7 +42,7 @@ def vapid(monkeypatch):
     settings = get_settings()
     monkeypatch.setattr(settings, "vapid_private_key", push.generate_private_key())
     monkeypatch.setattr(settings, "vapid_subject", "mailto:push@example.com")
-    push_test.limiter.counts.clear()
+    alerts.limiter.counts.clear()
     return settings
 
 
@@ -69,7 +69,7 @@ def signed_in(name: str = "tester") -> Browser:
 
 
 def send(browser: Browser, subscription: dict, delay: int = 0):
-    return browser.post("/push-test/send", json={"subscription": subscription, "delay": delay})
+    return browser.post("/account/push/test", json={"subscription": subscription, "delay": delay})
 
 
 def test_message_is_encrypted_for_the_device_and_signed_with_our_key(vapid, service) -> None:
@@ -79,7 +79,7 @@ def test_message_is_encrypted_for_the_device_and_signed_with_our_key(vapid, serv
     (request,) = service.requests
     payload = device.open(request.content)
     assert payload["title"] == "바로채널 시험 알림"
-    assert payload["url"].startswith("/push-test?")
+    assert payload["url"].startswith("/account/notifications?")
     assert request.headers["content-encoding"] == "aes128gcm"
     assert request.headers["ttl"] == "86400"
 
@@ -160,23 +160,26 @@ def test_login_csrf_rate_and_delay_limits(vapid, service, client) -> None:
     browser = signed_in()
     row = {"subscription": Device().json()}
     assert client.get("/push-test").status_code == 303
-    assert browser.http.post("/push-test/send", json=row).status_code == 403
+    assert browser.http.post("/account/push/test", json=row).status_code == 403
     assert send(browser, Device().json(), delay=121).status_code == 422
-    for _ in range(push_test.SENDS_PER_MINUTE):
+    for _ in range(alerts.SENDS_PER_MINUTE):
         assert send(browser, Device().json()).status_code == 200
     assert send(browser, Device().json()).status_code == 429
 
 
 def test_page_and_menu_follow_the_setting(vapid, monkeypatch) -> None:
     browser = signed_in()
-    page = browser.get("/push-test")
+    page = browser.get("/account/notifications")
     assert page.status_code == 200 and push.public_key() in page.text
     assert vapid.vapid_private_key not in page.text
-    assert "/push-test" in browser.get("/more").text
+    assert "/account/notifications" in browser.get("/more").text
+    assert "push.js" in browser.get("/more").text
+    assert browser.get("/push-test").headers["location"] == "/account/notifications"
     monkeypatch.setattr(vapid, "vapid_private_key", "")
-    assert browser.get("/push-test").status_code == 404
+    assert browser.get("/account/notifications").status_code == 404
     assert send(browser, Device().json()).status_code == 404
-    assert "/push-test" not in browser.get("/more").text
+    more = browser.get("/more").text
+    assert "/account/notifications" not in more and "push.js" not in more
 
 
 def test_service_worker_is_served_at_the_root_without_cache(client) -> None:

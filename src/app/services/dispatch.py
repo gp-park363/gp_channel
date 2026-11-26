@@ -23,6 +23,7 @@ from app.models import (
     User,
     WorkspaceGroup,
 )
+from app.services import notify
 from app.services.approvals import ApprovalRow, step_label
 from app.services.audit import record_audit
 from app.services.permissions import Authorizer, access_for_users
@@ -182,7 +183,9 @@ async def send(
         send_type="manual" if actor_id else "auto",
     )
     await publish(session, Event("created", target.id, copy.id, actor_id or approval.drafter_id))
-    await publish_counts(session, await receivers(session, target))
+    eligible = await receivers(session, target)
+    await publish_counts(session, eligible)
+    await notify.enqueue(session, "approval_receiving", copy.id, eligible, actor_id)
 
 
 async def auto_dispatch(

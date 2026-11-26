@@ -88,13 +88,18 @@ async def _department_members(
     return members
 
 
+@dataclass(frozen=True)
+class MentionChange:
+    """changed는 미확인 개수가 바뀐 사람, added는 새로 읽음 확인 대상이 된 사람이다."""
+
+    changed: set[int]
+    added: set[int]
+
+
 async def sync_mentions(
     session: AsyncSession, post: Post, parent: Post | None, channel: Channel
-) -> set[int]:
-    """본문에 맞춰 대상자를 고치고 미확인 개수가 바뀐 사람을 돌려준다.
-
-    이미 확인한 행은 멘션을 지워도 기록으로 남긴다.
-    """
+) -> MentionChange:
+    """본문에 맞춰 대상자를 고친다. 이미 확인한 행은 멘션을 지워도 기록으로 남긴다."""
     users = (await session.execute(select(User.id, User.name).where(User.status == "active"))).all()
     departments = (await session.execute(select(Department.id, Department.name))).all()
     found = find_mentions(post.body_md, users, departments)
@@ -144,7 +149,7 @@ async def sync_mentions(
         MentionAck(post_id=post.id, user_id=user_id, source_department_id=targets[user_id])
         for user_id in added
     )
-    return removed | added
+    return MentionChange(removed | added, added)
 
 
 @dataclass(frozen=True)

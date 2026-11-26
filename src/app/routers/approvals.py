@@ -42,6 +42,7 @@ from app.routers.posts import (
 )
 from app.routers.spaces import REFRESH, managed_channel
 from app.services import approvals as rules
+from app.services import notify
 from app.services.approvals import (
     Plan,
     PlanError,
@@ -155,11 +156,18 @@ def close(session: AsyncSession, doc: Document, result: str, actor: User, now: d
         )
 
 
+async def notify_result(session: AsyncSession, doc: Document, actor: User) -> None:
+    """승인, 반려, 폐기를 기안자에게 알린다. 기안 취소는 기안자 본인이 하므로 알리지 않는다."""
+    await notify.enqueue(
+        session, "approval_result", doc.post.id, [doc.approval.drafter_id], actor.id
+    )
+
+
 async def respond(
-    session: AsyncSession, authz: Authorizer, doc: Document, notify: set[int]
+    session: AsyncSession, authz: Authorizer, doc: Document, changed: set[int]
 ) -> HTMLResponse:
     await publish(session, Event("updated", doc.channel.id, doc.post.id, authz.user.id))
-    await publish_counts(session, notify | {authz.user.id})
+    await publish_counts(session, changed | {authz.user.id})
     await session.commit()
     return await card(session, authz, doc.post, doc.parent, doc.channel, doc.access)
 
@@ -528,6 +536,10 @@ async def submit(
     )
     # 임시저장은 다른 사람의 화면에 없었으므로 새 글로도 알린다.
     await publish(session, Event("created", doc.channel.id, doc.post.id, user.id))
+    # 최종 승인 차례인데 검토가 남았으면 발송 직전 판정이 거른다. 검토가 끝날 때 다시 넣는다.
+    await notify.enqueue(session, "approval_turn", doc.post.id, [approvers[0]], user.id)
+    await notify.enqueue(session, "approval_review", doc.post.id, reviewers, user.id)
+    await notify.enqueue(session, "approval_reference", doc.post.id, references, user.id)
     return await respond(session, authz, doc, {approvers[0], *reviewers, *references})
 
 
@@ -547,9 +559,11 @@ async def approve(post_id: int, session: SessionDep, authz: AuthzDep) -> HTMLRes
     if rules.is_final_turn(approval, doc.steps):
         close(session, doc, "approved", user, now)
         await auto_dispatch(session, approval, doc.post, doc.steps)
+        await notify_result(session, doc, user)
         return await respond(session, authz, doc, {approval.drafter_id})
     approval.current_step += 1
     upcoming = rules.current(approval, doc.steps)
+    await notify.enqueue(session, "approval_turn", doc.post.id, [upcoming.approver_id], user.id)
     return await respond(session, authz, doc, {upcoming.approver_id})
 
 
@@ -573,6 +587,7 @@ async def reject(
     step.acted_at = now
     audit(session, doc, user, "reject", step_no=step.step_no, comment=comment.strip())
     close(session, doc, "rejected", user, now)
+    await notify_result(session, doc, user)
     return await respond(session, authz, doc, {approval.drafter_id, *waiting_reviewers(doc)})
 
 
@@ -634,6 +649,7 @@ async def discard(
     doc.approval.discard_reason = reason.strip()
     audit(session, doc, user, "discard", reason=reason.strip(), blocked=sorted(blocked))
     close(session, doc, "discarded", user, datetime.now(UTC))
+    await notify_result(session, doc, user)
     await publish(session, Event("updated", channel.id, post.id, user.id))
     await publish_counts(
         session, {user.id, doc.approval.drafter_id, *waiting, *waiting_reviewers(doc)}
@@ -702,6 +718,7 @@ async def receive(post_id: int, session: SessionDep, authz: AuthzDep) -> HTMLRes
     )
     await publish(session, Event("updated", source.channel_id, source.id, user.id))
     await session.flush()
+    await notify.enqueue(session, "approval_turn", doc.post.id, [approvers[0]], user.id)
     return await respond(session, authz, doc, {approvers[0], *eligible})
 
 
@@ -790,8 +807,16 @@ async def review(
     if doc.approval.status != "in_progress":
         raise conflict("결재가 끝나 검토 결과를 바꿀 수 없습니다.")
     audit(session, doc, authz.user, "review", before=mine.result, after=result)
+    first = mine.result is None
     mine.result = result
     mine.reviewed_at = datetime.now(UTC)
+    waiting = rules.current(doc.approval, doc.steps)
+    if first and waiting is not None and rules.reviews_done(doc.reviews):
+        # 마지막 검토가 끝나 최종 승인자가 승인할 수 있게 됐다. 개수도 다시 센다.
+        await notify.enqueue(
+            session, "approval_turn", doc.post.id, [waiting.approver_id], authz.user.id
+        )
+        return await respond(session, authz, doc, {waiting.approver_id})
     return await respond(session, authz, doc, set())
 
 

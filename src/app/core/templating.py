@@ -8,6 +8,7 @@ from fastapi.templating import Jinja2Templates
 from app.core.config import get_settings
 from app.core.security import csrf_token
 from app.models import CHANNEL_TYPES
+from app.services import push
 from app.services.admin import is_system_admin
 
 APP_DIR = Path(__file__).resolve().parent.parent
@@ -38,6 +39,8 @@ templates.env.globals["CHANNEL_TYPES"] = CHANNEL_TYPES
 templates.env.globals["csrf_token"] = csrf_token
 templates.env.globals["asset"] = asset
 templates.env.globals["is_system_admin"] = is_system_admin
+templates.env.globals["push_enabled"] = push.enabled
+templates.env.globals["push_public_key"] = push.public_key
 templates.env.globals["company_name"] = get_settings().company_name
 # 첨부 한도. 화면이 미리 걸러 주는 용도이고, 서버가 다시 검사한다.
 templates.env.globals["UPLOAD"] = {

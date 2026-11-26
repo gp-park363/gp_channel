@@ -9,6 +9,7 @@ from app.core.deps import CurrentUser
 from app.core.security import check_password, csrf_token, hash_password
 from app.core.templating import fragment, templates
 from app.models import User
+from app.routers.alerts import forget
 from app.services.admin import admin_login, is_admin_email, is_system_admin
 
 router = APIRouter(tags=["auth"], include_in_schema=False)
@@ -44,7 +45,16 @@ async def login(
 
 
 @router.post("/logout")
-async def logout(request: Request) -> Response:
+async def logout(
+    request: Request,
+    session: SessionDep,
+    push_endpoint: Annotated[str, Form(max_length=2000)] = "",
+) -> Response:
+    """이 기기의 알림 구독도 지운다. 지울 수 있는 것은 로그인한 본인의 구독뿐이다."""
+    user_id = request.session.get("user_id")
+    if user_id and push_endpoint:
+        await forget(session, user_id, push_endpoint)
+        await session.commit()
     request.session.clear()
     return Response(headers={"HX-Redirect": "/login"})
 

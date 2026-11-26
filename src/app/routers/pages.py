@@ -6,7 +6,6 @@ from app.core.db import SessionDep
 from app.core.deps import AuthzDep
 from app.core.templating import templates
 from app.models import Channel, Department, UserDepartment
-from app.services import push
 from app.services.approvals import (
     my_drafts,
     my_handled,
@@ -104,7 +103,6 @@ async def more(request: Request, session: SessionDep, authz: AuthzDep) -> HTMLRe
             "root_tab": True,
             "departments": list(departments),
             "manages_groups": bool(await authz.managed_group_ids()),
-            "push_test": push.enabled(),
         },
     )
 

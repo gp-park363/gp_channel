@@ -30,6 +30,7 @@ from app.models.flow import (
 )
 from app.models.org import Department, User, UserDepartment
 from app.models.poll import Poll, PollOption, PollVote, PollVoteHistory
+from app.models.push import PushOutbox, PushPreference, PushSubscription
 from app.models.space import (
     CHANNEL_TYPES,
     Channel,
@@ -71,6 +72,9 @@ __all__ = [
     "PollVote",
     "PollVoteHistory",
     "Post",
+    "PushOutbox",
+    "PushPreference",
+    "PushSubscription",
     "PostRevision",
     "Reaction",
     "User",

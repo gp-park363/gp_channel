@@ -34,6 +34,7 @@ from app.models import (
     Reaction,
     User,
 )
+from app.services import notify
 from app.services.audit import record_audit
 from app.services.flows import add_note, load_doc, participants
 from app.services.mentions import MentionError, sync_mentions
@@ -141,10 +142,11 @@ async def apply_mentions(
         # 임시저장은 대상자가 볼 수 없다. 상신할 때 멘션을 처리한다.
         return
     try:
-        changed = await sync_mentions(session, post, parent, channel)
+        change = await sync_mentions(session, post, parent, channel)
     except MentionError as error:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(error)) from error
-    await publish_counts(session, changed)
+    await publish_counts(session, change.changed)
+    await notify.enqueue(session, "mention", post.id, change.added, post.author_id)
 
 
 def require_content(body: str, files: list[UploadFile]) -> None:
@@ -398,6 +400,7 @@ async def request_reconfirm(session: AsyncSession, post: Post, actor_id: int) ->
             user_ids=sorted(reset),
         )
         await publish_counts(session, reset)
+        await notify.enqueue(session, "mention_again", post.id, reset, actor_id)
 
 
 @router.post("/posts/{post_id}/ack", response_class=HTMLResponse)

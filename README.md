@@ -5,6 +5,7 @@
 - 기획서: [barochannel.md](barochannel.md)
 - 업무 채널 기획: [work_channel.md](work_channel.md)
 - 워크플로우 채널 기획: [workflow_channel.md](workflow_channel.md)
+- 알림 기획: [notification.md](notification.md)
 - 업무 연동 개발 가이드: [work_integration_guide.md](work_integration_guide.md)
 - 개발 일정: [project_plan.md](project_plan.md)
 

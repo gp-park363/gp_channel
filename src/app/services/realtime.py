@@ -6,7 +6,7 @@ NOTIFY에는 번호만 싣고 본문은 싣지 않는다. 내용은 연결마다
 import asyncio
 import json
 import logging
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from contextlib import suppress
 from dataclasses import asdict, dataclass
 
@@ -53,6 +53,8 @@ class Hub:
         # 개수 연결마다 새 글 수를 세는 채널. 그 채널에 글이 오면 다시 세도록 깨운다.
         self._watching: dict[asyncio.Queue[bool | None], frozenset[int]] = {}
         self._task: asyncio.Task[None] | None = None
+        # 알림 대기열에 새 건이 들어오면 부른다. main이 발송 작업을 이어 준다.
+        self.on_push: Callable[[], None] | None = None
 
     def subscribe(self, channel_id: int) -> asyncio.Queue[Event | None]:
         queue: asyncio.Queue[Event | None] = asyncio.Queue(QUEUE_SIZE)
@@ -107,7 +109,10 @@ class Hub:
 
     def _on_notify(self, _connection: object, _pid: int, _channel: str, payload: str) -> None:
         data = json.loads(payload)
-        if "user_ids" in data:
+        if "push" in data:
+            if self.on_push is not None:
+                self.on_push()
+        elif "user_ids" in data:
             self.dispatch_counts(data["user_ids"])
         else:
             self.dispatch(Event(**data))

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block body %}
-<div class="frame">
+<div class="frame"{% if user is defined and user and push_enabled() %} data-push-user="{{ user.id }}" data-push-key="{{ push_public_key() }}"{% endif %}>
   {% if user is defined and user %}
   <header class="user-bar">
     <a class="brand" href="/"><img src="{{ asset('brand/logo.svg') }}" alt="" width="26" height="26"><span class="brand-text"><span class="brand-name">{{ company_name }}</span>{% if company_name != "바로채널" %}<small class="brand-by">Powered by 바로Channel</small>{% endif %}</span></a>
@@ -28,6 +28,7 @@
   </div>
   {# 업무 화면(templates/works)을 iframe으로 띄운다. 입력 화면과 상세 화면이 함께 쓴다. #}
   <dialog id="work-modal" class="modal work-modal" aria-label="업무 화면"><div id="work-modal-body"></div></dialog>
+  {% if user is defined and user and push_enabled() %}<script src="{{ asset('push.js') }}" defer></script>{% endif %}
   {% if root_tab %}<nav class="tabbar" aria-label="주 메뉴">{% include "partials/nav_tabs.html" %}</nav>{% endif %}
 </div>
 {% endblock %}

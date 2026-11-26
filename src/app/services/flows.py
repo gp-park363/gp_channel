@@ -25,6 +25,7 @@ from app.models import (
     User,
 )
 from app.models.flow import FLOW_OPEN
+from app.services import notify
 from app.services.audit import record_audit
 from app.services.flow_rules import (
     DONE_LABELS,
@@ -613,6 +614,7 @@ async def close(
         session.add(
             Notification(user_id=item.registrant_id, type="flow_result", ref_id=doc.post.id)
         )
+        await notify.enqueue(session, "flow_result", doc.post.id, [item.registrant_id], actor.id)
     await prune_people(session, doc.channel.id)
 
 
@@ -644,6 +646,7 @@ async def submit(session: AsyncSession, doc: FlowDoc, actor: User) -> set[int]:
         picks=doc.picks,
     )
     ready = await start_step(session, doc, 1)
+    await notify.enqueue(session, "flow_turn", doc.post.id, ready, actor.id)
     rebuild_body(doc)
     return ready
 
@@ -695,7 +698,9 @@ async def complete(
     else:
         # 다음 담당자를 정할 때 이번 완료도 봐야 하므로 먼저 단계를 옮긴다.
         doc.item.current_step = step_no + 1
-        changed |= await start_step(session, doc, step_no + 1)
+        ready = await start_step(session, doc, step_no + 1)
+        await notify.enqueue(session, "flow_turn", doc.post.id, ready, actor.id)
+        changed |= ready
     rebuild_body(doc)
     return changed
 
@@ -759,9 +764,13 @@ async def send_back(
     if target == 0:
         doc.item.status = "returned"
         doc.item.current_step = 0
+        registrant = [doc.item.registrant_id]
+        await notify.enqueue(session, "flow_returned", doc.post.id, registrant, actor.id)
     else:
         doc.item.current_step = target
-        changed |= await start_step(session, doc, target)
+        ready = await start_step(session, doc, target)
+        await notify.enqueue(session, "flow_turn", doc.post.id, ready, actor.id)
+        changed |= ready
     rebuild_body(doc)
     return changed
 
@@ -826,12 +835,15 @@ async def cancel(session: AsyncSession, doc: FlowDoc, actor: User) -> set[int]:
     task.status = "waiting"
     task.decision = None
     task.acted_at = None
+    revived = set()
     for row in doc.current_tasks:
         # 먼저 완료한 사람 때문에 빠졌던 담당자도 다시 차례를 받는다.
         if row.status == "skipped":
             row.status = "waiting"
             row.acted_at = None
-            changed.add(row.assignee_id)
+            revived.add(row.assignee_id)
+    changed |= revived
+    await notify.enqueue(session, "flow_turn", doc.post.id, revived, actor.id)
     audit(session, doc, actor, "cancel", step=doc.steps[task.step_no]["label"])
     await session.flush()
     rebuild_body(doc)
@@ -990,18 +1002,19 @@ async def change_people(
                 task.acted_at = now
                 task.comment = reason or None
         await session.flush()
-        for user_id in chosen:
-            if user_id not in before and user_id not in finished:
-                task = FlowTask(
-                    item_id=doc.item.id,
-                    round=doc.item.round,
-                    step_no=step_no,
-                    assignee_id=user_id,
-                    status="waiting",
-                    values={},
-                )
-                session.add(task)
-                doc.tasks.append(task)
+        added = [user_id for user_id in chosen if user_id not in before + finished]
+        await notify.enqueue(session, "flow_turn", doc.post.id, added, actor.id)
+        for user_id in added:
+            task = FlowTask(
+                item_id=doc.item.id,
+                round=doc.item.round,
+                step_no=step_no,
+                assignee_id=user_id,
+                status="waiting",
+                values={},
+            )
+            session.add(task)
+            doc.tasks.append(task)
         keep |= set(finished)
     # 되돌아와 다시 할 때도 바꾼 담당자가 맡는다.
     await save_picks(session, doc, {**doc.picks, step["key"]: sorted(keep)})
@@ -1064,6 +1077,7 @@ async def reassign(
     )
     session.add(task)
     doc.tasks.append(task)
+    await notify.enqueue(session, "flow_turn", doc.post.id, [new_id], actor.id)
     # 되돌아와 다시 할 때도 새 담당자가 맡는다.
     key = doc.step["key"]
     people = [one for one in await planned(session, doc, doc.step) if one != old_id]
