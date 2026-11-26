@@ -30,10 +30,17 @@ async function openPage(path) {
   if (url.origin !== self.location.origin) url.href = self.location.origin;
   const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
   for (const client of windows) {
+    let moved;
     try {
-      const moved = await client.navigate(url.href);
-      return await (moved || client).focus();
-    } catch { /* 옮길 수 없는 창이면 새로 연다. */ }
+      moved = await client.navigate(url.href);
+    } catch {
+      continue; // 옮길 수 없는 창이면 다음 창을 본다.
+    }
+    // 앞으로 가져오지 못해도 이미 옮겼으므로 새 창을 또 열지 않는다.
+    try {
+      await (moved || client).focus();
+    } catch { /* 브라우저가 막으면 그대로 둔다. */ }
+    return;
   }
   return self.clients.openWindow(url.href);
 }
