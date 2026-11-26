@@ -18,5 +18,15 @@
 <body hx-headers='{{ {"X-CSRF-Token": csrf_token(request)}|tojson }}'>
   {% block body %}{% endblock %}
   <div id="toast" role="status" aria-live="polite" hidden></div>
+  {# 취소·삭제 같은 확인은 브라우저 기본 창 대신 이 팝업으로 묻는다(app.js). #}
+  <dialog id="confirm-modal" class="modal confirm-modal" aria-labelledby="confirm-text">
+    <form method="dialog" class="modal-form stack">
+      <p id="confirm-text"></p>
+      <div class="modal-actions">
+        <button value="cancel">취소</button>
+        <button value="ok" class="primary">확인</button>
+      </div>
+    </form>
+  </dialog>
 </body>
 </html>

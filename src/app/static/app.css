@@ -518,3 +518,11 @@ a.button.soft { background: var(--accent-soft); color: var(--accent-soft-text); 
 #flow-assignees summary { cursor: pointer; }
 .flow-change { margin-top: 14px; }
 .flow-change + .flow-change { border-top: 1px solid var(--fill); padding-top: 14px; }
+
+/* 확인 팝업: 휴대폰에서도 화면 전체를 덮지 않는다 */
+.confirm-modal { max-width: 400px; }
+.confirm-modal p { font-size: 16px; line-height: 1.6; overflow-wrap: anywhere; white-space: pre-line; }
+.confirm-modal .modal-actions button { min-width: 88px; }
+@media (max-width: 640px) {
+  .modal.confirm-modal { border-radius: 20px; height: fit-content; max-height: calc(100dvh - 48px); max-width: 400px; width: calc(100% - 32px); }
+}

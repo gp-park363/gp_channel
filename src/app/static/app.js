@@ -9,6 +9,49 @@
     timer = setTimeout(() => { toast.hidden = true; }, 4000);
   }
 
+  // 확인 팝업. 브라우저 기본 확인창 대신 앱 화면 안에 띄운다. 확인을 누르면 true다.
+  const confirmModal = document.getElementById("confirm-modal");
+  let confirmDone = null;
+
+  function askConfirm(text) {
+    if (!confirmModal) return Promise.resolve(window.confirm(text));
+    if (confirmDone) confirmDone(false);
+    const ok = confirmModal.querySelector("button[value=ok]");
+    confirmModal.querySelector("#confirm-text").textContent = text;
+    // 되돌릴 수 없는 일은 확인 버튼을 빨갛게 보여 준다.
+    const danger = /삭제|폐기|회수|되돌릴 수 없|취소할 수 없/.test(text);
+    ok.classList.toggle("danger", danger);
+    ok.classList.toggle("primary", !danger);
+    confirmModal.returnValue = "";
+    return new Promise((resolve) => {
+      confirmDone = (value) => {
+        confirmDone = null;
+        resolve(value);
+      };
+      confirmModal.showModal();
+      ok.focus();
+    });
+  }
+
+  if (confirmModal) {
+    // Esc, 바깥 누르기, 취소 버튼은 모두 취소다.
+    confirmModal.addEventListener("close", () => {
+      if (confirmDone) confirmDone(confirmModal.returnValue === "ok");
+    });
+    confirmModal.addEventListener("click", (event) => {
+      if (event.target === confirmModal) confirmModal.close("cancel");
+    });
+  }
+
+  // hx-confirm 문구가 있는 요청은 팝업에서 확인한 뒤에 보낸다.
+  document.body.addEventListener("htmx:confirm", (event) => {
+    if (!event.detail.question) return;
+    event.preventDefault();
+    askConfirm(event.detail.question).then((ok) => {
+      if (ok) event.detail.issueRequest(true);
+    });
+  });
+
   function errorText(xhr) {
     try {
       const detail = JSON.parse(xhr.responseText).detail;
@@ -837,9 +880,20 @@
     document.querySelectorAll("#flow-action input[name=seen]").forEach((input) => { input.value = event.detail.seen; });
   });
 
+  // 폼의 버튼 하나에만 확인을 걸 때. 확인하면 같은 버튼을 다시 눌러 보낸다.
   document.body.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-confirm]");
-    if (button && !confirm(button.dataset.confirm)) event.preventDefault();
+    if (!button) return;
+    if (button.dataset.confirmed) {
+      delete button.dataset.confirmed;
+      return;
+    }
+    event.preventDefault();
+    askConfirm(button.dataset.confirm).then((ok) => {
+      if (!ok) return;
+      button.dataset.confirmed = "1";
+      button.click();
+    });
   });
 
   // 건 화면의 추가 내용을 누르면 쓰레드의 그 답글로 간다.
@@ -954,8 +1008,8 @@
     return { width: link.dataset.workWidth, height: link.dataset.workHeight };
   }
 
-  function closeWorkModal(force) {
-    if (!force && workDirty && !confirm("입력한 내용이 사라집니다. 닫을까요?")) return;
+  async function closeWorkModal(force) {
+    if (!force && workDirty && !(await askConfirm("입력한 내용이 사라집니다. 닫을까요?"))) return;
     workModal.close();
     document.getElementById("work-modal-body").replaceChildren();
     workFrame = null;
